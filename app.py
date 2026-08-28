@@ -315,7 +315,7 @@ def calculate_stock(
     ticker = symbol + ".NS"
 
     # --------------------------------------------------------
-    # DAILY DATA
+    # DAILY
     # --------------------------------------------------------
 
     daily = get_ticker_data(
@@ -337,7 +337,7 @@ def calculate_stock(
         return None
 
     # --------------------------------------------------------
-    # INTRADAY DATA
+    # INTRADAY
     # --------------------------------------------------------
 
     intraday = get_ticker_data(
@@ -391,7 +391,7 @@ def calculate_stock(
     )
 
     # --------------------------------------------------------
-    # HISTORICAL DATA
+    # HISTORICAL DAILY DATA
     # --------------------------------------------------------
 
     historical = daily.loc[
@@ -720,19 +720,34 @@ def calculate_stock(
 def trend_colour(value):
 
     if value == "Bullish":
-        return "background-color: green; color: white; font-weight: bold;"
 
-    if value == "Neutral":
-        return "background-color: orange; color: black; font-weight: bold;"
+        return (
+            "background-color: green; "
+            "color: white; "
+            "font-weight: bold;"
+        )
 
-    if value == "Bearish":
-        return "background-color: red; color: white; font-weight: bold;"
+    elif value == "Neutral":
+
+        return (
+            "background-color: orange; "
+            "color: black; "
+            "font-weight: bold;"
+        )
+
+    elif value == "Bearish":
+
+        return (
+            "background-color: red; "
+            "color: white; "
+            "font-weight: bold;"
+        )
 
     return ""
 
 
 # ============================================================
-# SCAN BUTTON
+# MAIN SCAN BUTTON
 # ============================================================
 
 if st.button(
@@ -829,7 +844,7 @@ if st.button(
     today = now_ist.date()
 
     # ========================================================
-    # CALCULATE ALL STOCKS
+    # CALCULATE
     # ========================================================
 
     results = []
@@ -890,7 +905,7 @@ if st.button(
     )
 
     # ========================================================
-    # EXACT COLUMN ORDER
+    # EXACT SAME COLUMN ORDER
     # ========================================================
 
     df = df[
@@ -959,7 +974,7 @@ if st.button(
         df[column] = pd.to_numeric(
             df[column],
             errors="coerce"
-        ).round(2)
+        )
 
     # ========================================================
     # TIMESTAMP
@@ -981,19 +996,14 @@ if st.button(
     )
 
     # ========================================================
-    # TABLE STYLE
+    # TABLE FORMATTING
     #
-    # ONLY TREND COLUMN IS COLOURED.
-    # ALL OTHER DATA REMAINS UNCHANGED.
+    # Display numbers to exactly 2 decimals.
+    # Underlying calculations remain full precision.
     # ========================================================
 
-    styled_df = df.style.map(
-        trend_colour,
-        subset=["Trend"]
-    )
+    format_dict = {
 
-    # ========================================================
-    # DISPLAY TABLE
-    # ========================================================
+        "Price": "{:.2f}",
 
-   
+    
