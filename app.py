@@ -4,12 +4,13 @@ import numpy as np
 import yfinance as yf
 import requests
 import csv
-from io import StringIO
+import io
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+
 # =========================================================
-# PAGE SETTINGS
+# PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
@@ -18,278 +19,256 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# =========================================================
+# TITLE
+# =========================================================
+
 st.title("📊 My Stock Screener")
 st.subheader("Nifty 100 Technical Screener")
 
 
 # =========================================================
-# GET CURRENT NIFTY 100 STOCKS
+# NIFTY 100 CONSTITUENTS
 # =========================================================
 
-@st.cache_data(ttl=86400)
-def get_nifty100_stocks():
+NIFTY100_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 
-    url = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
+
+@st.cache_data(ttl=86400)
+def get_nifty100_list():
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "*/*",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "text/csv,application/csv,text/plain,*/*",
         "Referer": "https://www.niftyindices.com/"
     }
 
     response = requests.get(
-        url,
+        NIFTY100_URL,
         headers=headers,
-        timeout=30
+        timeout=20
     )
 
     response.raise_for_status()
 
-    # Decode safely
-    text = response.content.decode(
-        "utf-8-sig",
-        errors="replace"
-    )
-
     # -----------------------------------------------------
-    # Read CSV using Python csv module
-    # This avoids the tokenizing error
+    # IMPORTANT:
+    # Use csv.reader instead of pandas.read_csv directly.
+    # This avoids the tokenizing error seen earlier.
     # -----------------------------------------------------
 
-    rows = list(
-        csv.reader(
-            StringIO(text)
-        )
-    )
+    text = response.content.decode("utf-8-sig", errors="replace")
 
-    if not rows:
-        raise ValueError("Nifty 100 file is empty.")
+    reader = csv.reader(io.StringIO(text))
 
-    # Find the row containing Symbol
-    header_index = None
+    rows = list(reader)
 
-    for i, row in enumerate(rows):
+    if len(rows) < 2:
+        raise ValueError("Nifty 100 CSV returned no data.")
 
-        cleaned = [
-            str(x).strip().lower()
-            for x in row
-        ]
+    header = [str(x).strip() for x in rows[0]]
 
-        if "symbol" in cleaned:
-            header_index = i
-            break
-
-    if header_index is None:
-        raise ValueError(
-            "Could not find Symbol column in Nifty 100 file."
-        )
-
-    header = [
-        str(x).strip()
-        for x in rows[header_index]
-    ]
-
-    symbol_position = None
+    # Find Symbol column
+    symbol_index = None
 
     for i, col in enumerate(header):
-
         if col.lower() == "symbol":
-            symbol_position = i
+            symbol_index = i
             break
 
-    if symbol_position is None:
-        raise ValueError(
-            "Symbol column not found."
-        )
+    if symbol_index is None:
+        raise ValueError("Symbol column not found in Nifty 100 CSV.")
 
     symbols = []
 
-    for row in rows[header_index + 1:]:
+    for row in rows[1:]:
 
-        if len(row) <= symbol_position:
+        if len(row) <= symbol_index:
             continue
 
-        symbol = str(
-            row[symbol_position]
-        ).strip()
+        symbol = row[symbol_index].strip()
 
-        # Ignore empty rows
-        if not symbol:
-            continue
+        if symbol:
+            symbols.append(symbol)
 
-        # Ignore possible footer/header text
-        if symbol.lower() in [
-            "symbol",
-            "company name",
-            "isin code"
-        ]:
-            continue
+    # Remove duplicates while maintaining order
+    symbols = list(dict.fromkeys(symbols))
 
-        symbols.append(symbol)
-
-    # Remove duplicates
-    symbols = list(
-        dict.fromkeys(symbols)
-    )
-
-    if len(symbols) < 90:
+    if len(symbols) < 80:
         raise ValueError(
-            f"Only {len(symbols)} stocks found. "
-            "Nifty 100 list could not be read correctly."
+            f"Only {len(symbols)} Nifty 100 stocks were found."
         )
 
     return symbols
 
 
 # =========================================================
-# GET STOCK DATA
+# DOWNLOAD STOCK DATA
 # =========================================================
 
 @st.cache_data(ttl=900)
-def get_stock_data(symbol):
+def download_stock_data(symbols):
+
+    tickers = [symbol + ".NS" for symbol in symbols]
+
+    data = yf.download(
+        tickers=tickers,
+        period="2y",
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        group_by="ticker",
+        threads=True
+    )
+
+    return data
+
+
+# =========================================================
+# CALCULATE STOCK INDICATORS
+# =========================================================
+
+def calculate_stock_data(symbol, data):
 
     ticker = symbol + ".NS"
 
     try:
 
-        data = yf.download(
-            ticker,
-            period="1y",
-            interval="1d",
-            auto_adjust=False,
-            progress=False
-        )
-
-        if data.empty:
-            return None
-
-        # Handle yfinance MultiIndex
-        if isinstance(
-            data.columns,
-            pd.MultiIndex
-        ):
-            data.columns = (
-                data.columns
-                .get_level_values(0)
-            )
-
-        data = data.dropna(
-            subset=["Close"]
-        )
-
-        if len(data) < 30:
-            return None
-
-        close = data["Close"]
-
         # -------------------------------------------------
-        # PRICE
+        # Handle yfinance MultiIndex data
         # -------------------------------------------------
 
-        price = float(
-            close.iloc[-1]
-        )
+        if isinstance(data.columns, pd.MultiIndex):
+
+            if ticker not in data.columns.get_level_values(0):
+                return None
+
+            df = data[ticker].copy()
+
+        else:
+
+            df = data.copy()
+
+        if df.empty:
+            return None
+
+        # -------------------------------------------------
+        # Make sure required column exists
+        # -------------------------------------------------
+
+        if "Close" not in df.columns:
+            return None
+
+        close = df["Close"].dropna()
+
+        if len(close) < 220:
+            return None
+
+        # -------------------------------------------------
+        # Current price
+        # -------------------------------------------------
+
+        price = float(close.iloc[-1])
 
         # -------------------------------------------------
         # RETURNS
+        #
+        # 1D = previous trading day's close
+        # 1W = 5 trading sessions ago
+        # 1M = 21 trading sessions ago
         # -------------------------------------------------
 
-        # 1 Day
-        if len(close) >= 2:
+        one_day_return = (
+            (close.iloc[-1] / close.iloc[-2]) - 1
+        ) * 100
 
-            return_1d = (
-                price /
-                float(close.iloc[-2])
-                - 1
-            ) * 100
+        one_week_return = (
+            (close.iloc[-1] / close.iloc[-6]) - 1
+        ) * 100
 
-        else:
-            return_1d = np.nan
-
-        # 1 Week
-        if len(close) >= 6:
-
-            return_1w = (
-                price /
-                float(close.iloc[-6])
-                - 1
-            ) * 100
-
-        else:
-            return_1w = np.nan
-
-        # 1 Month
-        if len(close) >= 22:
-
-            return_1m = (
-                price /
-                float(close.iloc[-22])
-                - 1
-            ) * 100
-
-        else:
-            return_1m = np.nan
+        one_month_return = (
+            (close.iloc[-1] / close.iloc[-22]) - 1
+        ) * 100
 
         # -------------------------------------------------
         # EMA
         # -------------------------------------------------
 
-        ema21 = (
-            close
-            .ewm(
-                span=21,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
-        )
+        ema21 = close.ewm(
+            span=21,
+            adjust=False
+        ).mean().iloc[-1]
 
-        ema50 = (
-            close
-            .ewm(
-                span=50,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
-        )
+        ema50 = close.ewm(
+            span=50,
+            adjust=False
+        ).mean().iloc[-1]
 
-        ema200 = (
-            close
-            .ewm(
-                span=200,
-                adjust=False
-            )
-            .mean()
-            .iloc[-1]
-        )
+        ema200 = close.ewm(
+            span=200,
+            adjust=False
+        ).mean().iloc[-1]
 
         # -------------------------------------------------
-        # 52 WEEK LOW
+        # 52 WEEK HIGH / LOW
+        #
+        # Approximately 252 trading sessions
         # -------------------------------------------------
 
-        low_52w = float(
-            close.min()
-        )
+        last_252 = close.tail(252)
 
-        distance_52w_low = (
-            price /
-            low_52w
-            - 1
+        week52_high = float(last_252.max())
+        week52_low = float(last_252.min())
+
+        # -------------------------------------------------
+        # DISTANCE FROM 52 WEEK HIGH
+        #
+        # Example:
+        # Price = 900
+        # 52W High = 1000
+        # Result = -10%
+        # -------------------------------------------------
+
+        from_52w_high = (
+            (price / week52_high) - 1
+        ) * 100
+
+        # -------------------------------------------------
+        # DISTANCE FROM 52 WEEK LOW
+        #
+        # Example:
+        # Price = 120
+        # 52W Low = 100
+        # Result = +20%
+        # -------------------------------------------------
+
+        from_52w_low = (
+            (price / week52_low) - 1
         ) * 100
 
         # -------------------------------------------------
         # DISTANCE FROM 21 EMA
         # -------------------------------------------------
 
-        distance_21ema = (
-            price /
-            ema21
-            - 1
+        from_21_ema = (
+            (price / ema21) - 1
         ) * 100
 
         # -------------------------------------------------
         # TREND
+        #
+        # Bullish:
+        # Price > 21 EMA > 50 EMA > 200 EMA
+        #
+        # Bearish:
+        # Price < 21 EMA < 50 EMA < 200 EMA
+        #
+        # Otherwise Neutral
         # -------------------------------------------------
 
         if (
@@ -297,7 +276,6 @@ def get_stock_data(symbol):
             and ema21 > ema50
             and ema50 > ema200
         ):
-
             trend = "Bullish"
 
         elif (
@@ -305,47 +283,44 @@ def get_stock_data(symbol):
             and ema21 < ema50
             and ema50 < ema200
         ):
-
             trend = "Bearish"
 
         else:
-
             trend = "Neutral"
 
+        # -------------------------------------------------
+        # RETURN RESULT
+        # -------------------------------------------------
+
         return {
-
             "Stock": symbol,
-
             "Price": price,
 
-            "1D Return %": return_1d,
-
-            "1W Return %": return_1w,
-
-            "1M Return %": return_1m,
+            "1D Return %": one_day_return,
+            "1W Return %": one_week_return,
+            "1M Return %": one_month_return,
 
             "21 EMA": ema21,
-
             "50 EMA": ema50,
-
             "200 EMA": ema200,
 
-            "From 52W Low %":
-                distance_52w_low,
+            "52W High": week52_high,
+            "52W Low": week52_low,
 
-            "From 21 EMA %":
-                distance_21ema,
+            "From 52W High %": from_52w_high,
+            "From 52W Low %": from_52w_low,
+
+            "From 21 EMA %": from_21_ema,
 
             "Trend": trend
         }
 
     except Exception:
-
         return None
 
 
 # =========================================================
-# TREND COLOUR
+# TREND COLOUR FUNCTION
 # =========================================================
 
 def colour_trend(value):
@@ -361,7 +336,7 @@ def colour_trend(value):
     elif value == "Neutral":
 
         return (
-            "background-color: #f0ad4e;"
+            "background-color: #F5B642;"
             "color: black;"
             "font-weight: bold;"
         )
@@ -369,7 +344,7 @@ def colour_trend(value):
     elif value == "Bearish":
 
         return (
-            "background-color: #dc3545;"
+            "background-color: #DC3545;"
             "color: white;"
             "font-weight: bold;"
         )
@@ -382,260 +357,236 @@ def colour_trend(value):
 # =========================================================
 
 if st.button(
-    "🔍 Scan Nifty 100"
+    "🔍 Scan Nifty 100",
+    use_container_width=False
 ):
 
     # -----------------------------------------------------
-    # GET CURRENT NIFTY 100
+    # Get current Nifty 100 list
+    # -----------------------------------------------------
+
+    try:
+
+        symbols = get_nifty100_list()
+
+        st.info(
+            f"Current Nifty 100 list: {len(symbols)} stocks"
+        )
+
+    except Exception as e:
+
+        st.error(
+            "Unable to get the current Nifty 100 list."
+        )
+
+        st.error(str(e))
+
+        st.stop()
+
+    # -----------------------------------------------------
+    # Download data
     # -----------------------------------------------------
 
     with st.spinner(
-        "Getting current Nifty 100 list..."
+        "Downloading Nifty 100 market data..."
     ):
 
         try:
 
-            stocks = (
-                get_nifty100_stocks()
-            )
+            data = download_stock_data(symbols)
 
         except Exception as e:
 
             st.error(
-                "Unable to get the current "
-                "Nifty 100 list."
+                "Unable to download stock data."
             )
 
-            st.error(
-                str(e)
-            )
+            st.error(str(e))
 
             st.stop()
 
-    st.info(
-        f"Current Nifty 100 list: "
-        f"{len(stocks)} stocks"
-    )
-
     # -----------------------------------------------------
-    # SCAN STOCKS
+    # Calculate indicators
     # -----------------------------------------------------
 
     results = []
 
     progress = st.progress(0)
 
-    total = len(stocks)
+    total = len(symbols)
 
-    for i, symbol in enumerate(stocks):
+    for i, symbol in enumerate(symbols):
 
-        result = get_stock_data(
-            symbol
+        result = calculate_stock_data(
+            symbol,
+            data
         )
 
         if result is not None:
-
             results.append(result)
 
         progress.progress(
-            (i + 1) / total
+            int(((i + 1) / total) * 100)
         )
 
     progress.empty()
 
+    # -----------------------------------------------------
+    # Create DataFrame
+    # -----------------------------------------------------
+
     if not results:
 
         st.error(
-            "No stock data could be downloaded."
+            "No stock data could be calculated."
         )
 
         st.stop()
 
-    # -----------------------------------------------------
-    # DATAFRAME
-    # -----------------------------------------------------
+    df = pd.DataFrame(results)
 
-    df = pd.DataFrame(
-        results
-    )
+    # =====================================================
+    # COLUMN ORDER
+    # =====================================================
 
-    # -----------------------------------------------------
-    # SORT BY 1 WEEK RETURN
-    # -----------------------------------------------------
-
-    df = (
-        df.sort_values(
-            by="1W Return %",
-            ascending=False
-        )
-        .reset_index(drop=True)
-    )
-
-    # -----------------------------------------------------
-    # ROUND NUMBERS
-    # -----------------------------------------------------
-
-    numeric_columns = [
-
+    columns = [
+        "Stock",
         "Price",
 
         "1D Return %",
-
         "1W Return %",
-
         "1M Return %",
 
         "21 EMA",
-
         "50 EMA",
-
         "200 EMA",
 
-        "From 52W Low %",
+        "52W High",
+        "52W Low",
 
-        "From 21 EMA %"
+        "From 52W High %",
+        "From 52W Low %",
+        "From 21 EMA %",
+
+        "Trend"
     ]
 
-    for col in numeric_columns:
+    df = df[columns]
 
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        ).round(2)
+    # =====================================================
+    # SORTING
+    #
+    # Sort by From 21 EMA % descending
+    # =====================================================
 
-    # -----------------------------------------------------
-    # LAST UPDATE TIME
-    # -----------------------------------------------------
+    df = df.sort_values(
+        by="From 21 EMA %",
+        ascending=False
+    ).reset_index(drop=True)
 
-    update_time = datetime.now(
-        ZoneInfo("Asia/Kolkata")
+    # =====================================================
+    # LAST UPDATED TIME
+    # =====================================================
+
+    ist = ZoneInfo("Asia/Kolkata")
+
+    updated_time = datetime.now(
+        ist
     ).strftime(
-        "%d-%m-%Y %I:%M:%S %p"
+        "%d-%m-%Y %I:%M:%S %p IST"
     )
 
     st.success(
-        f"🕒 Last updated: "
-        f"{update_time} IST"
+        f"🕐 Last updated: {updated_time}"
     )
 
-    st.write(
-        f"📋 **Results — "
-        f"{len(df)} stocks**"
+    # =====================================================
+    # RESULT COUNT
+    # =====================================================
+
+    st.subheader(
+        f"📋 Results — {len(df)} stocks"
     )
 
-    # -----------------------------------------------------
-    # STYLE TABLE
-    # -----------------------------------------------------
+    # =====================================================
+    # FORMAT NUMBERS
+    # =====================================================
+
+    display_df = df.copy()
+
+    number_columns = [
+        "Price",
+        "1D Return %",
+        "1W Return %",
+        "1M Return %",
+        "21 EMA",
+        "50 EMA",
+        "200 EMA",
+        "52W High",
+        "52W Low",
+        "From 52W High %",
+        "From 52W Low %",
+        "From 21 EMA %"
+    ]
+
+    for col in number_columns:
+
+        display_df[col] = display_df[col].round(2)
+
+    # =====================================================
+    # COLOUR TREND
+    # =====================================================
 
     styled_df = (
-
-        df.style
-
+        display_df.style
         .map(
             colour_trend,
             subset=["Trend"]
         )
+        .format(
+            {
+                "Price": "{:.2f}",
 
-        .format({
+                "1D Return %": "{:.2f}",
+                "1W Return %": "{:.2f}",
+                "1M Return %": "{:.2f}",
 
-            "Price": "{:.2f}",
+                "21 EMA": "{:.2f}",
+                "50 EMA": "{:.2f}",
+                "200 EMA": "{:.2f}",
 
-            "1D Return %":
-                "{:.2f}",
+                "52W High": "{:.2f}",
+                "52W Low": "{:.2f}",
 
-            "1W Return %":
-                "{:.2f}",
-
-            "1M Return %":
-                "{:.2f}",
-
-            "21 EMA":
-                "{:.2f}",
-
-            "50 EMA":
-                "{:.2f}",
-
-            "200 EMA":
-                "{:.2f}",
-
-            "From 52W Low %":
-                "{:.2f}",
-
-            "From 21 EMA %":
-                "{:.2f}"
-        })
+                "From 52W High %": "{:.2f}",
+                "From 52W Low %": "{:.2f}",
+                "From 21 EMA %": "{:.2f}"
+            }
+        )
     )
 
-    # -----------------------------------------------------
-    # DISPLAY
-    # -----------------------------------------------------
+    # =====================================================
+    # DISPLAY TABLE
+    # =====================================================
 
     st.dataframe(
-
         styled_df,
-
         use_container_width=True,
-
         height=650,
-
         hide_index=True
     )
 
-    # -----------------------------------------------------
-    # TREND SUMMARY
-    # -----------------------------------------------------
+    # =====================================================
+    # DOWNLOAD CSV
+    # =====================================================
 
-    bullish_count = (
-        df["Trend"]
-        .eq("Bullish")
-        .sum()
-    )
+    csv_data = df.to_csv(
+        index=False
+    ).encode("utf-8")
 
-    neutral_count = (
-        df["Trend"]
-        .eq("Neutral")
-        .sum()
-    )
-
-    bearish_count = (
-        df["Trend"]
-        .eq("Bearish")
-        .sum()
-    )
-
-    st.markdown("---")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "🟢 Bullish",
-            bullish_count
-        )
-
-    with col2:
-
-        st.metric(
-            "🟠 Neutral",
-            neutral_count
-        )
-
-    with col3:
-
-        st.metric(
-            "🔴 Bearish",
-            bearish_count
-        )
-
-else:
-
-    st.info(
-        "Click **🔍 Scan Nifty 100** "
-        "to scan the current Nifty 100 stocks."
-    )
-
-    st.caption(
-        "The Nifty 100 constituent list "
-        "is fetched automatically."
-    )
+    st.download_button(
+        label="⬇️ Download Results CSV",
+        data=csv_data,
+        file_name="nifty100_screener.csv",
+        mime="text/csv"
+)
