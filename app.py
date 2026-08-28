@@ -25,7 +25,6 @@ st.subheader("Nifty 100 Technical Screener")
 
 # =========================================================
 # NIFTY 100 LIST
-# Cached for 24 hours
 # =========================================================
 
 NIFTY100_URL = (
@@ -101,13 +100,14 @@ def get_nifty100_list():
         if symbol:
             symbols.append(symbol)
 
+    # Remove duplicates
     symbols = list(
         dict.fromkeys(symbols)
     )
 
     if len(symbols) < 95:
         raise ValueError(
-            f"Only {len(symbols)} stocks found."
+            f"Only {len(symbols)} Nifty 100 stocks found."
         )
 
     return symbols
@@ -115,12 +115,8 @@ def get_nifty100_list():
 
 # =========================================================
 # DAILY DATA
-#
-# NO CACHE
-# Used for historical calculations.
 # =========================================================
 
-@st.cache_data(ttl=0)
 def get_daily_data(symbols):
 
     tickers = [
@@ -140,89 +136,7 @@ def get_daily_data(symbols):
 
 
 # =========================================================
-# INTRADAY PRICE
-#
-# NO CACHE
-# Latest available 5-minute price
-# =========================================================
-
-@st.cache_data(ttl=0)
-def get_intraday_price(symbol):
-
-    ticker = symbol + ".NS"
-
-    try:
-
-        data = yf.download(
-            ticker,
-            period="1d",
-            interval="5m",
-            auto_adjust=False,
-            progress=False,
-            threads=False
-        )
-
-        if data is None or data.empty:
-            return None
-
-        # Handle MultiIndex
-        if isinstance(
-            data.columns,
-            pd.MultiIndex
-        ):
-
-            if "Close" in data.columns.get_level_values(0):
-
-                close = data.xs(
-                    "Close",
-                    axis=1,
-                    level=0
-                )
-
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
-
-            elif "Close" in data.columns.get_level_values(1):
-
-                close = data.xs(
-                    "Close",
-                    axis=1,
-                    level=1
-                )
-
-                if isinstance(close, pd.DataFrame):
-                    close = close.iloc[:, 0]
-
-            else:
-                return None
-
-        else:
-
-            if "Close" not in data.columns:
-                return None
-
-            close = data["Close"]
-
-        if isinstance(close, pd.DataFrame):
-            close = close.iloc[:, 0]
-
-        close = pd.to_numeric(
-            close,
-            errors="coerce"
-        ).dropna()
-
-        if close.empty:
-            return None
-
-        return float(close.iloc[-1])
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
-# EXTRACT DAILY CLOSE
+# GET DAILY CLOSE
 # =========================================================
 
 def get_daily_close(
@@ -279,7 +193,10 @@ def get_daily_close(
 
             close = data["Close"]
 
-        if isinstance(close, pd.DataFrame):
+        if isinstance(
+            close,
+            pd.DataFrame
+        ):
             close = close.iloc[:, 0]
 
         close = pd.to_numeric(
@@ -287,7 +204,137 @@ def get_daily_close(
             errors="coerce"
         ).dropna()
 
+        if close.empty:
+            return None
+
         return close
+
+    except Exception:
+
+        return None
+
+
+# =========================================================
+# REMOVE TODAY'S INCOMPLETE DAILY CANDLE
+# =========================================================
+
+def remove_today_candle(close):
+
+    try:
+
+        if close is None or close.empty:
+            return close
+
+        today_ist = datetime.now(
+            ZoneInfo("Asia/Kolkata")
+        ).date()
+
+        index_dates = pd.to_datetime(
+            close.index
+        ).date
+
+        mask = [
+            d < today_ist
+            for d in index_dates
+        ]
+
+        completed = close.loc[mask]
+
+        return completed
+
+    except Exception:
+
+        return close
+
+
+# =========================================================
+# GET INTRADAY / CURRENT PRICE
+# =========================================================
+
+def get_intraday_price(symbol):
+
+    ticker = symbol + ".NS"
+
+    try:
+
+        data = yf.download(
+            ticker,
+            period="1d",
+            interval="5m",
+            auto_adjust=False,
+            progress=False,
+            threads=False
+        )
+
+        if data is None or data.empty:
+            return None
+
+        # -------------------------------------------------
+        # MultiIndex handling
+        # -------------------------------------------------
+
+        if isinstance(
+            data.columns,
+            pd.MultiIndex
+        ):
+
+            if "Close" in data.columns.get_level_values(0):
+
+                close = data.xs(
+                    "Close",
+                    axis=1,
+                    level=0
+                )
+
+                if isinstance(
+                    close,
+                    pd.DataFrame
+                ):
+                    close = close.iloc[:, 0]
+
+            elif "Close" in data.columns.get_level_values(1):
+
+                close = data.xs(
+                    "Close",
+                    axis=1,
+                    level=1
+                )
+
+                if isinstance(
+                    close,
+                    pd.DataFrame
+                ):
+                    close = close.iloc[:, 0]
+
+            else:
+
+                return None
+
+        else:
+
+            if "Close" not in data.columns:
+                return None
+
+            close = data["Close"]
+
+        if isinstance(
+            close,
+            pd.DataFrame
+        ):
+            close = close.iloc[:, 0]
+
+        close = pd.to_numeric(
+            close,
+            errors="coerce"
+        ).dropna()
+
+        if close.empty:
+            return None
+
+        # Latest available 5-minute price
+        return float(
+            close.iloc[-1]
+        )
 
     except Exception:
 
@@ -309,74 +356,105 @@ def calculate_stock(
         if daily_close is None:
             return None
 
-        daily_close = pd.to_numeric(
-            daily_close,
+        # -------------------------------------------------
+        # Remove today's incomplete daily candle
+        # -------------------------------------------------
+
+        completed_close = remove_today_candle(
+            daily_close
+        )
+
+        if completed_close is None:
+            return None
+
+        if len(completed_close) < 220:
+            return None
+
+        completed_close = pd.to_numeric(
+            completed_close,
             errors="coerce"
         ).dropna()
 
-        if len(daily_close) < 220:
+        if len(completed_close) < 220:
             return None
 
-        # =================================================
-        # CURRENT PRICE
-        # =================================================
+        # -------------------------------------------------
+        # Current price
+        # -------------------------------------------------
 
         if live_price is None:
 
-            live_price = float(
-                daily_close.iloc[-1]
-            )
+            # If intraday unavailable, don't fake live price
+            return None
 
-        else:
-
-            live_price = float(
-                live_price
-            )
+        live_price = float(
+            live_price
+        )
 
         # =================================================
-        # PREVIOUS DAILY CLOSE
+        # PREVIOUS COMPLETED TRADING-DAY CLOSE
         # =================================================
 
         previous_close = float(
-            daily_close.iloc[-1]
+            completed_close.iloc[-1]
         )
 
         # =================================================
         # RETURNS
         #
-        # Current live price is used.
+        # CURRENT LIVE PRICE IS USED
         # =================================================
 
+        # 1 Day
         one_day_return = (
             live_price
             /
-            daily_close.iloc[-1]
+            completed_close.iloc[-1]
             - 1
         ) * 100
 
+        # 1 Week = 5 completed sessions
         one_week_return = (
             live_price
             /
-            daily_close.iloc[-6]
+            completed_close.iloc[-6]
             - 1
         ) * 100
 
+        # 1 Month = 21 completed sessions
         one_month_return = (
             live_price
             /
-            daily_close.iloc[-22]
+            completed_close.iloc[-22]
             - 1
         ) * 100
 
         # =================================================
-        # ADD LIVE PRICE AS TODAY'S LATEST PRICE
+        # ADD TODAY'S LIVE PRICE
         #
-        # This makes EMA reflect today's current price.
+        # This makes today's EMA reflect current price.
         # =================================================
 
-        calculation_close = daily_close.copy()
+        calculation_close = completed_close.copy()
 
-        calculation_close.iloc[-1] = live_price
+        calculation_close.loc[
+            calculation_close.index[-1]
+        ] = completed_close.iloc[-1]
+
+        # Append today's live price as a new observation
+        calculation_close = pd.concat(
+            [
+                calculation_close,
+                pd.Series(
+                    [live_price],
+                    index=[
+                        pd.Timestamp.now(
+                            tz="Asia/Kolkata"
+                        )
+                    ]
+                )
+            ]
+        )
 
         # =================================================
         # EMA
@@ -414,76 +492,54 @@ def calculate_stock(
 
         # =================================================
         # 52 WEEK HIGH / LOW
-        #
-        # Include current live price.
         # =================================================
 
-        last_252 = calculation_close.tail(252)
-
-        week52_high = float(
-            max(
-                last_252.max(),
-                live_price
-            )
+        last_252 = completed_close.tail(
+            252
         )
 
-        week52_low = float(
-            min(
-                last_252.min(),
-                live_price
-            )
+        week52_high = max(
+            float(last_252.max()),
+            live_price
+        )
+
+        week52_low = min(
+            float(last_252.min()),
+            live_price
         )
 
         # =================================================
         # DISTANCE FROM 52 WEEK HIGH
         # =================================================
 
-        if week52_high != 0:
-
-            from_52w_high = (
-                live_price
-                /
-                week52_high
-                - 1
-            ) * 100
-
-        else:
-
-            from_52w_high = np.nan
+        from_52w_high = (
+            live_price
+            /
+            week52_high
+            - 1
+        ) * 100
 
         # =================================================
         # DISTANCE FROM 52 WEEK LOW
         # =================================================
 
-        if week52_low != 0:
-
-            from_52w_low = (
-                live_price
-                /
-                week52_low
-                - 1
-            ) * 100
-
-        else:
-
-            from_52w_low = np.nan
+        from_52w_low = (
+            live_price
+            /
+            week52_low
+            - 1
+        ) * 100
 
         # =================================================
         # DISTANCE FROM 21 EMA
         # =================================================
 
-        if ema21 != 0:
-
-            from_21_ema = (
-                live_price
-                /
-                ema21
-                - 1
-            ) * 100
-
-        else:
-
-            from_21_ema = np.nan
+        from_21_ema = (
+            live_price
+            /
+            ema21
+            - 1
+        ) * 100
 
         # =================================================
         # TREND
@@ -575,7 +631,7 @@ def colour_trend(value):
             "font-weight: bold;"
         )
 
-    elif value == "Neutral":
+    if value == "Neutral":
 
         return (
             "background-color: #F5B642;"
@@ -583,7 +639,7 @@ def colour_trend(value):
             "font-weight: bold;"
         )
 
-    elif value == "Bearish":
+    if value == "Bearish":
 
         return (
             "background-color: #DC3545;"
@@ -595,7 +651,7 @@ def colour_trend(value):
 
 
 # =========================================================
-# SCAN BUTTON
+# SCAN
 # =========================================================
 
 if st.button(
@@ -603,7 +659,7 @@ if st.button(
 ):
 
     # =====================================================
-    # GET NIFTY 100
+    # CURRENT NIFTY 100
     # =====================================================
 
     try:
@@ -630,7 +686,7 @@ if st.button(
     # =====================================================
 
     with st.spinner(
-        "Downloading daily history..."
+        "Downloading daily historical data..."
     ):
 
         try:
@@ -650,7 +706,7 @@ if st.button(
             st.stop()
 
     # =====================================================
-    # PROCESS STOCKS
+    # PROCESS
     # =====================================================
 
     results = []
@@ -664,7 +720,7 @@ if st.button(
     for i, symbol in enumerate(symbols):
 
         # -------------------------------------------------
-        # Daily close
+        # Historical daily close
         # -------------------------------------------------
 
         daily_close = get_daily_close(
@@ -673,7 +729,7 @@ if st.button(
         )
 
         # -------------------------------------------------
-        # Live / latest intraday price
+        # Current intraday price
         # -------------------------------------------------
 
         live_price = get_intraday_price(
@@ -696,7 +752,9 @@ if st.button(
 
         else:
 
-            missing_stocks.append(symbol)
+            missing_stocks.append(
+                symbol
+            )
 
         progress.progress(
             int(
@@ -707,7 +765,7 @@ if st.button(
     progress.empty()
 
     # =====================================================
-    # CHECK RESULTS
+    # RESULTS
     # =====================================================
 
     if not results:
@@ -718,7 +776,9 @@ if st.button(
 
         st.stop()
 
-    df = pd.DataFrame(results)
+    df = pd.DataFrame(
+        results
+    )
 
     # =====================================================
     # COLUMN ORDER
@@ -761,7 +821,7 @@ if st.button(
     )
 
     # =====================================================
-    # LAST UPDATE
+    # UPDATE TIME
     # =====================================================
 
     ist = ZoneInfo(
@@ -775,19 +835,21 @@ if st.button(
     )
 
     st.success(
-        f"🕐 Latest data request: "
+        f"🕐 Last updated: "
         f"{updated_time}"
     )
 
     # =====================================================
-    # DATA NOTE
+    # DATA DESCRIPTION
     # =====================================================
 
     st.caption(
-        "Price uses the latest available "
-        "Yahoo Finance 5-minute intraday data. "
-        "Technical calculations incorporate "
-        "the current price."
+        "Price = latest available Yahoo Finance "
+        "5-minute intraday price. "
+        "Returns use the current price against "
+        "completed previous trading-day closes. "
+        "EMA calculations incorporate today's "
+        "current price."
     )
 
     # =====================================================
@@ -805,12 +867,12 @@ if st.button(
     if missing_stocks:
 
         st.warning(
-            "Data unavailable for: "
+            "Intraday/historical data unavailable for: "
             + ", ".join(missing_stocks)
         )
 
     # =====================================================
-    # ROUND NUMBERS
+    # DISPLAY DATA
     # =====================================================
 
     display_df = df.copy()
@@ -843,7 +905,7 @@ if st.button(
         ).round(2)
 
     # =====================================================
-    # STYLE
+    # COLOUR TREND
     # =====================================================
 
     styled_df = (
@@ -877,7 +939,7 @@ if st.button(
     )
 
     # =====================================================
-    # DISPLAY
+    # TABLE
     # =====================================================
 
     st.dataframe(
@@ -887,17 +949,4 @@ if st.button(
         hide_index=True
     )
 
-    # =====================================================
-    # DOWNLOAD CSV
-    # =====================================================
-
-    csv_data = df.to_csv(
-        index=False
-    ).encode("utf-8")
-
-    st.download_button(
-        label="⬇️ Download Results CSV",
-        data=csv_data,
-        file_name="nifty100_live_screener.csv",
-        mime="text/csv"
-)
+    
