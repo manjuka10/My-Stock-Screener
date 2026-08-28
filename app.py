@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# PAGE CONFIG
+# PAGE
 # ============================================================
 
 st.set_page_config(
@@ -18,11 +18,6 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
-
-
-# ============================================================
-# TITLE
-# ============================================================
 
 st.title("📊 My Stock Screener")
 st.subheader("Nifty 100 Technical Screener")
@@ -262,15 +257,6 @@ def get_date(value):
 
 # ============================================================
 # PREVIOUS MONTH CLOSE
-#
-# Example:
-#
-# 28-Aug
-#    ↓
-# 28-Jul close
-#
-# If target is holiday/weekend,
-# use latest available trading day before/on target.
 # ============================================================
 
 def get_previous_month_close(
@@ -381,7 +367,7 @@ def calculate_stock(
                 prices.iloc[-1]
             )
 
-    # Fallback to latest daily close
+    # Fallback
 
     if (
         not np.isfinite(current_price)
@@ -405,7 +391,7 @@ def calculate_stock(
     )
 
     # --------------------------------------------------------
-    # HISTORICAL DATA
+    # HISTORICAL DAILY DATA
     # --------------------------------------------------------
 
     historical = daily.loc[
@@ -451,8 +437,7 @@ def calculate_stock(
 
     # ========================================================
     # 1 WEEK RETURN
-    #
-    # 5 trading sessions back
+    # 5 TRADING SESSIONS BACK
     # ========================================================
 
     if len(historical) >= 5:
@@ -479,7 +464,6 @@ def calculate_stock(
 
     # ========================================================
     # 1 MONTH RETURN
-    #
     # PREVIOUS MONTH CORRESPONDING DATE
     # ========================================================
 
@@ -547,9 +531,7 @@ def calculate_stock(
 
     # ========================================================
     # 52 WEEK HIGH / LOW
-    #
     # ACTUAL HIGH AND LOW
-    #
     # NO 220 TRADING-DAY RULE
     # ========================================================
 
@@ -706,7 +688,7 @@ def calculate_stock(
         trend = "Neutral"
 
     # ========================================================
-    # RETURN RESULT
+    # RESULT
     # ========================================================
 
     return {
@@ -730,42 +712,6 @@ def calculate_stock(
 
         "Trend": trend
     }
-
-
-# ============================================================
-# TREND COLOUR FUNCTION
-# ============================================================
-
-def colour_trend(value):
-
-    if value == "Bullish":
-
-        return (
-            "background-color: green;"
-            "color: white;"
-            "font-weight: bold;"
-            "text-align: center;"
-        )
-
-    elif value == "Neutral":
-
-        return (
-            "background-color: orange;"
-            "color: black;"
-            "font-weight: bold;"
-            "text-align: center;"
-        )
-
-    elif value == "Bearish":
-
-        return (
-            "background-color: red;"
-            "color: white;"
-            "font-weight: bold;"
-            "text-align: center;"
-        )
-
-    return ""
 
 
 # ============================================================
@@ -854,7 +800,7 @@ if st.button(
             )
 
     # ========================================================
-    # CURRENT IST TIME
+    # CURRENT TIME
     # ========================================================
 
     ist = ZoneInfo(
@@ -868,7 +814,7 @@ if st.button(
     today = now_ist.date()
 
     # ========================================================
-    # CALCULATE ALL STOCKS
+    # CALCULATE
     # ========================================================
 
     results = []
@@ -890,7 +836,9 @@ if st.button(
 
             if result is not None:
 
-                results.append(result)
+                results.append(
+                    result
+                )
 
         except Exception:
 
@@ -919,7 +867,7 @@ if st.button(
         st.stop()
 
     # ========================================================
-    # CREATE DATAFRAME
+    # DATAFRAME
     # ========================================================
 
     df = pd.DataFrame(
@@ -959,7 +907,7 @@ if st.button(
     # ========================================================
 
     df = df.sort_values(
-        by="From 21 EMA %",
+        "From 21 EMA %",
         ascending=False,
         na_position="last"
     )
@@ -999,7 +947,7 @@ if st.button(
         ).round(2)
 
     # ========================================================
-    # UPDATED TIME
+    # TIMESTAMP
     # ========================================================
 
     updated_time = now_ist.strftime(
@@ -1008,4 +956,69 @@ if st.button(
 
     st.success(
         "🕐 Last updated: "
-        + u
+        + updated_time
+    )
+
+    st.subheader(
+        "📋 Results — "
+        + str(len(df))
+        + " stocks"
+    )
+
+    # ========================================================
+    # TREND COLOURS
+    #
+    # Uses Streamlit's native dataframe styling.
+    # Calculations are NOT changed.
+    # ========================================================
+
+    def trend_background(value):
+
+        if value == "Bullish":
+            return "background-color: green; color: white;"
+
+        if value == "Neutral":
+            return "background-color: orange; color: black;"
+
+        if value == "Bearish":
+            return "background-color: red; color: white;"
+
+        return ""
+
+
+    # ========================================================
+    # STYLE TABLE
+    # ========================================================
+
+    styled_df = df.style.map(
+        trend_background,
+        subset=["Trend"]
+    )
+
+    # ========================================================
+    # DISPLAY TABLE
+    # ========================================================
+
+    st.dataframe(
+        styled_df,
+        use_container_width=True,
+        height=650,
+        hide_index=True
+    )
+
+    # ========================================================
+    # DOWNLOAD CSV
+    # ========================================================
+
+    csv_data = df.to_csv(
+        index=False
+    ).encode(
+        "utf-8"
+    )
+
+    st.download_button(
+        label="⬇️ Download Results CSV",
+        data=csv_data,
+        file_name="nifty100_screener.csv",
+        mime="text/csv"
+    )
