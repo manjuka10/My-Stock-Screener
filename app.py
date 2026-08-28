@@ -11,9 +11,10 @@ st.set_page_config(
 st.title("📊 My Stock Screener")
 st.caption("Nifty 100 Technical Screener")
 
-# --------------------------------------------------
+
+# ==================================================
 # NIFTY 100 STOCKS
-# --------------------------------------------------
+# ==================================================
 
 stocks = [
     "RELIANCE", "BHARTIARTL", "HDFCBANK", "ICICIBANK",
@@ -42,9 +43,10 @@ stocks = [
     "GAIL", "INDUSTOWER", "LICI", "PAYTM"
 ]
 
-# --------------------------------------------------
+
+# ==================================================
 # SIDEBAR FILTERS
-# --------------------------------------------------
+# ==================================================
 
 st.sidebar.header("🔍 Screener Filters")
 
@@ -82,9 +84,10 @@ trend_filter = st.sidebar.selectbox(
     ]
 )
 
-# --------------------------------------------------
-# SCAN
-# --------------------------------------------------
+
+# ==================================================
+# SCAN BUTTON
+# ==================================================
 
 if st.button("🔍 Scan Nifty 100", type="primary"):
 
@@ -114,9 +117,17 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
             if len(close) < 200:
                 continue
 
+            # ------------------------------------------
+            # CURRENT PRICE
+            # ------------------------------------------
+
             price = float(close.iloc[-1])
 
-            # Returns
+
+            # ------------------------------------------
+            # RETURNS
+            # ------------------------------------------
+
             weekly_return = (
                 price / float(close.iloc[-6]) - 1
             ) * 100
@@ -125,82 +136,191 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
                 price / float(close.iloc[-22]) - 1
             ) * 100
 
-            # EMAs
+
+            # ------------------------------------------
+            # EMA
+            # ------------------------------------------
+
             ema21 = float(
-                close.ewm(span=21, adjust=False).mean().iloc[-1]
+                close.ewm(
+                    span=21,
+                    adjust=False
+                ).mean().iloc[-1]
             )
 
             ema50 = float(
-                close.ewm(span=50, adjust=False).mean().iloc[-1]
+                close.ewm(
+                    span=50,
+                    adjust=False
+                ).mean().iloc[-1]
             )
 
             ema200 = float(
-                close.ewm(span=200, adjust=False).mean().iloc[-1]
+                close.ewm(
+                    span=200,
+                    adjust=False
+                ).mean().iloc[-1]
             )
 
-            # Daily returns
+
+            # ------------------------------------------
+            # VOLATILITY
+            # ------------------------------------------
+
             daily_returns = close.pct_change().dropna()
 
-            # Annualized historical volatility
             volatility = (
-                daily_returns.std() * (252 ** 0.5)
+                daily_returns.std()
+                * (252 ** 0.5)
             ) * 100
 
-            # 52 week levels
+
+            # ------------------------------------------
+            # 52 WEEK HIGH / LOW
+            # ------------------------------------------
+
             high_52w = float(close.max())
+
             low_52w = float(close.min())
+
+
+            # ------------------------------------------
+            # DISTANCE FROM 52W HIGH
+            # ------------------------------------------
 
             distance_high = (
                 (price / high_52w) - 1
             ) * 100
 
+
+            # ------------------------------------------
+            # DISTANCE FROM 52W LOW
+            # ------------------------------------------
+
             distance_low = (
                 (price / low_52w) - 1
             ) * 100
 
-            # Trend
-            if price > ema50 and ema50 > ema200:
+
+            # ------------------------------------------
+            # DISTANCE FROM 21 EMA
+            # ------------------------------------------
+
+            distance_21ema = (
+                (price / ema21) - 1
+            ) * 100
+
+
+            # ------------------------------------------
+            # TREND CLASSIFICATION
+            # ------------------------------------------
+
+            if (
+                price > ema21
+                and ema21 > ema50
+                and ema50 > ema200
+            ):
+
                 trend = "Bullish"
 
-            elif price < ema50 and ema50 < ema200:
+            elif (
+                price < ema21
+                and ema21 < ema50
+                and ema50 < ema200
+            ):
+
                 trend = "Bearish"
 
             else:
+
                 trend = "Neutral"
 
+
+            # ------------------------------------------
+            # STORE RESULTS
+            # ------------------------------------------
+
             results.append({
+
                 "Stock": symbol,
-                "Price": round(price, 2),
-                "1W Return %": round(weekly_return, 2),
-                "1M Return %": round(monthly_return, 2),
-                "21 EMA": round(ema21, 2),
-                "50 EMA": round(ema50, 2),
-                "200 EMA": round(ema200, 2),
-                "Volatility %": round(volatility, 2),
-                "52W High": round(high_52w, 2),
-                "52W Low": round(low_52w, 2),
-                "From 52W High %": round(distance_high, 2),
+
+                "Price": round(
+                    price, 2
+                ),
+
+                "1W Return %": round(
+                    weekly_return, 2
+                ),
+
+                "1M Return %": round(
+                    monthly_return, 2
+                ),
+
+                "21 EMA": round(
+                    ema21, 2
+                ),
+
+                "50 EMA": round(
+                    ema50, 2
+                ),
+
+                "200 EMA": round(
+                    ema200, 2
+                ),
+
+                "Volatility %": round(
+                    volatility, 2
+                ),
+
+                "52W High": round(
+                    high_52w, 2
+                ),
+
+                "52W Low": round(
+                    low_52w, 2
+                ),
+
+                "From 52W High %": round(
+                    distance_high, 2
+                ),
+
+                "From 52W Low %": round(
+                    distance_low, 2
+                ),
+
+                "From 21 EMA %": round(
+                    distance_21ema, 2
+                ),
+
                 "Trend": trend
             })
 
+
         except Exception:
             continue
+
 
         progress.progress(
             (i + 1) / len(stocks)
         )
 
+
     progress.empty()
 
-    # --------------------------------------------------
+
+    # ==================================================
     # RESULTS
-    # --------------------------------------------------
+    # ==================================================
 
     df = pd.DataFrame(results)
 
+
     if not df.empty:
 
-        # Apply filters
+        # ----------------------------------------------
+        # APPLY FILTERS
+        # ----------------------------------------------
+
         df = df[
             (df["1W Return %"] >= min_weekly)
             &
@@ -211,14 +331,31 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
             (df["From 52W High %"] >= min_distance_high)
         ]
 
-        if trend_filter != "All":
-            df = df[df["Trend"] == trend_filter]
 
-        # Sort
+        # ----------------------------------------------
+        # TREND FILTER
+        # ----------------------------------------------
+
+        if trend_filter != "All":
+
+            df = df[
+                df["Trend"] == trend_filter
+            ]
+
+
+        # ----------------------------------------------
+        # SORT
+        # ----------------------------------------------
+
         df = df.sort_values(
             "1W Return %",
             ascending=False
         )
+
+
+        # ----------------------------------------------
+        # DISPLAY
+        # ----------------------------------------------
 
         st.subheader(
             f"📋 Results — {len(df)} stocks"
@@ -230,15 +367,17 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
             hide_index=True
         )
 
+
     else:
 
         st.warning(
             "No stocks matched the selected filters."
         )
 
+
 else:
 
     st.info(
         "Set your filters on the left and tap "
         "'Scan Nifty 100'."
-        )
+)
