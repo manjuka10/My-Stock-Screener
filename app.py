@@ -275,14 +275,41 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     # Current price vs previous month's corresponding date close
     # --------------------------------------------------------
 
-    month_base = previous_month_same_or_previous_trading_close(
-        historical,
-        today
-    )
+    # 1-month return uses completed daily closes only.
+    # Example: on 29-Aug, use 28-Aug close / 28-Jul close.
+    completed_dates = index_to_dates(historical.index)
 
-    if np.isfinite(month_base) and month_base > 0:
+    if len(historical) >= 1:
+        latest_completed_date = completed_dates.iloc[-1]
+
+        target_date = (
+            pd.Timestamp(latest_completed_date)
+            - pd.DateOffset(months=1)
+        ).date()
+
+        month_base_rows = historical.loc[
+            completed_dates <= target_date
+        ].dropna(subset=["Close"])
+
+        if not month_base_rows.empty:
+            month_base = float(
+                month_base_rows["Close"].iloc[-1]
+            )
+        else:
+            month_base = np.nan
+    else:
+        month_base = np.nan
+
+    if (
+        np.isfinite(month_base)
+        and month_base > 0
+    ):
         one_month = round(
-            (current_price / month_base - 1.0) * 100.0,
+            (
+                current_price /
+                month_base
+                - 1.0
+            ) * 100.0,
             2
         )
     else:
