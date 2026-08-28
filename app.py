@@ -163,16 +163,22 @@ def index_to_dates(index):
 
 def previous_month_same_or_previous_trading_close(history, current_date):
     """
-    Current date 28-Aug -> target 28-Jul.
-    If 28-Jul is not a trading day, use the latest available
-    trading day on or before 28-Jul.
+    Monthly return base:
+    current date -> same calendar date in previous month.
+
+    Example:
+    28-Aug -> 28-Jul close.
+
+    If that date was not a trading day, use the latest available
+    trading-day close on or before the target date.
     """
 
     if history.empty:
         return np.nan
 
-    target = pd.Timestamp(current_date) - pd.DateOffset(months=1)
-    target_date = target.date()
+    current_ts = pd.Timestamp(current_date)
+    target_ts = current_ts - pd.DateOffset(months=1)
+    target_date = target_ts.date()
 
     dates = index_to_dates(history.index)
 
@@ -275,7 +281,10 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     )
 
     if np.isfinite(month_base) and month_base > 0:
-        one_month = (current_price / month_base - 1.0) * 100.0
+        one_month = round(
+            (current_price / month_base - 1.0) * 100.0,
+            2
+        )
     else:
         one_month = np.nan
 
@@ -633,7 +642,17 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
     # The dataframe itself remains unchanged.
     # --------------------------------------------------------
 
-    styled_df = df.style.map(
+    display_df = df.copy()
+
+    # Explicit two-decimal display for every numeric column.
+    display_format = {}
+    for col in numeric_columns:
+        display_format[col] = "{:.2f}"
+
+    styled_df = display_df.style.format(
+        display_format,
+        na_rep="—"
+    ).map(
         colour_trend,
         subset=["Trend"]
     )
@@ -656,4 +675,4 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
         data=csv_data,
         file_name="nifty100_options_screener.csv",
         mime="text/csv"
-        )
+)
