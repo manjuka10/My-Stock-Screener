@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yfinance as yf
 import requests
 from io import StringIO
 from datetime import datetime
+import pytz
 
-# ---------------------------------------------------------
+# =========================================================
 # PAGE SETTINGS
-# ---------------------------------------------------------
+# =========================================================
 
 st.set_page_config(
     page_title="My Stock Screener",
@@ -17,11 +17,12 @@ st.set_page_config(
 )
 
 st.title("📊 My Stock Screener")
-st.caption("Nifty 100 Technical Screener")
+st.caption("Automatic Nifty 100 Technical Screener")
 
-# ---------------------------------------------------------
+
+# =========================================================
 # GET CURRENT NIFTY 100 CONSTITUENTS
-# ---------------------------------------------------------
+# =========================================================
 
 @st.cache_data(ttl=21600)
 def get_nifty100_stocks():
@@ -46,18 +47,21 @@ def get_nifty100_stocks():
 
     response.raise_for_status()
 
-    df = pd.read_csv(StringIO(response.text))
+    df = pd.read_csv(
+        StringIO(response.text)
+    )
 
-    # Find the symbol column automatically
     symbol_column = None
 
-    for col in df.columns:
-        if "symbol" in col.lower():
-            symbol_column = col
+    for column in df.columns:
+        if "symbol" in column.lower():
+            symbol_column = column
             break
 
     if symbol_column is None:
-        raise Exception("Could not find Symbol column in Nifty 100 file.")
+        raise Exception(
+            "Symbol column not found in Nifty 100 file."
+        )
 
     symbols = (
         df[symbol_column]
@@ -67,15 +71,15 @@ def get_nifty100_stocks():
         .tolist()
     )
 
-    # Yahoo Finance symbols
-    symbols = [symbol + ".NS" for symbol in symbols]
+    return [
+        symbol + ".NS"
+        for symbol in symbols
+    ]
 
-    return symbols
 
-
-# ---------------------------------------------------------
-# CALCULATE STOCK DATA
-# ---------------------------------------------------------
+# =========================================================
+# ANALYZE STOCK
+# =========================================================
 
 def analyze_stock(symbol):
 
@@ -85,7 +89,7 @@ def analyze_stock(symbol):
             symbol,
             period="1y",
             interval="1d",
-            auto_adjust=False,
+            auto_adjust=True,
             progress=False,
             threads=False
         )
@@ -93,204 +97,235 @@ def analyze_stock(symbol):
         if data.empty:
             return None
 
-        # Handle Yahoo Finance multi-level columns
         if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
+            data.columns = (
+                data.columns.get_level_values(0)
+            )
 
-        data = data.dropna(subset=["Close"])
+        data = data.dropna(
+            subset=["Close"]
+        )
 
-        if len(data) < 50:
+        if len(data) < 200:
             return None
 
         close = data["Close"]
 
-        current_price = float(close.iloc[-1])
+        # =================================================
+        # PRICE
+        # =================================================
 
-        previous_close = float(close.iloc[-2])
+        price = float(
+            close.iloc[-1]
+        )
 
-        # -------------------------------------------------
-        # 1 DAY RETURN
-        # -------------------------------------------------
+        previous_close = float(
+            close.iloc[-2]
+        )
+
+
+        # =================================================
+        # RETURNS
+        # =================================================
 
         one_day_return = (
-            (current_price / previous_close) - 1
+            price / previous_close - 1
         ) * 100
 
-        # -------------------------------------------------
-        # 21 EMA
-        # -------------------------------------------------
+        one_week_return = (
+            price / float(close.iloc[-6]) - 1
+        ) * 100
+
+        one_month_return = (
+            price / float(close.iloc[-22]) - 1
+        ) * 100
+
+
+        # =================================================
+        # EMA
+        # =================================================
 
         ema21 = close.ewm(
             span=21,
             adjust=False
         ).mean()
 
-        current_ema21 = float(ema21.iloc[-1])
-
-        distance_from_ema21 = (
-            (current_price / current_ema21) - 1
-        ) * 100
-
-        # -------------------------------------------------
-        # 52 WEEK HIGH / LOW
-        # -------------------------------------------------
-
-        week52_high = float(close.max())
-        week52_low = float(close.min())
-
-        distance_from_high = (
-            (current_price / week52_high) - 1
-        ) * 100
-
-        distance_from_low = (
-            (current_price / week52_low) - 1
-        ) * 100
-
-        # -------------------------------------------------
-        # TREND
-        # -------------------------------------------------
-
         ema50 = close.ewm(
             span=50,
             adjust=False
         ).mean()
 
-        current_ema50 = float(ema50.iloc[-1])
+        ema200 = close.ewm(
+            span=200,
+            adjust=False
+        ).mean()
 
-        previous_ema21 = float(ema21.iloc[-2])
-        previous_ema50 = float(ema50.iloc[-2])
+        current_ema21 = float(
+            ema21.iloc[-1]
+        )
+
+        current_ema50 = float(
+            ema50.iloc[-1]
+        )
+
+        current_ema200 = float(
+            ema200.iloc[-1]
+        )
+
+
+        # =================================================
+        # DISTANCE FROM 21 EMA
+        # =================================================
+
+        distance_21ema = (
+            price / current_ema21 - 1
+        ) * 100
+
+
+        # =================================================
+        # 52 WEEK HIGH / LOW
+        # =================================================
+
+        high_52w = float(
+            close.max()
+        )
+
+        low_52w = float(
+            close.min()
+        )
+
+
+        # =================================================
+        # DISTANCE FROM 52 WEEK HIGH
+        # =================================================
+
+        distance_high = (
+            price / high_52w - 1
+        ) * 100
+
+
+        # =================================================
+        # DISTANCE FROM 52 WEEK LOW
+        # =================================================
+
+        distance_low = (
+            price / low_52w - 1
+        ) * 100
+
+
+        # =================================================
+        # VOLATILITY
+        # =================================================
+
+        daily_returns = (
+            close.pct_change()
+            .dropna()
+        )
+
+        volatility = (
+            daily_returns.std()
+            * (252 ** 0.5)
+            * 100
+        )
+
+
+        # =================================================
+        # TREND
+        # =================================================
 
         if (
-            current_price > current_ema21
+            price > current_ema21
             and current_ema21 > current_ema50
-            and current_ema21 > previous_ema21
+            and current_ema50 > current_ema200
         ):
             trend = "Bullish"
 
         elif (
-            current_price < current_ema21
+            price < current_ema21
             and current_ema21 < current_ema50
-            and current_ema21 < previous_ema21
+            and current_ema50 < current_ema200
         ):
             trend = "Bearish"
 
         else:
             trend = "Neutral"
 
+
+        # =================================================
+        # RETURN
+        # =================================================
+
         return {
-            "Stock": symbol.replace(".NS", ""),
-            "Price": round(current_price, 2),
-            "1D Return %": round(one_day_return, 2),
-            "High %": round(distance_from_high, 2),
-            "From 52W Low %": round(distance_from_low, 2),
-            "From 21 EMA %": round(distance_from_ema21, 2),
-            "Trend": trend
+
+            "Stock":
+                symbol.replace(".NS", ""),
+
+            "Price":
+                round(price, 2),
+
+            "1D Return %":
+                round(one_day_return, 2),
+
+            "1W Return %":
+                round(one_week_return, 2),
+
+            "1M Return %":
+                round(one_month_return, 2),
+
+            "21 EMA":
+                round(current_ema21, 2),
+
+            "50 EMA":
+                round(current_ema50, 2),
+
+            "200 EMA":
+                round(current_ema200, 2),
+
+            "From 21 EMA %":
+                round(distance_21ema, 2),
+
+            "Volatility %":
+                round(volatility, 2),
+
+            "52W High":
+                round(high_52w, 2),
+
+            "52W Low":
+                round(low_52w, 2),
+
+            "From 52W High %":
+                round(distance_high, 2),
+
+            "From 52W Low %":
+                round(distance_low, 2),
+
+            "Trend":
+                trend
         }
 
-    except Exception as e:
+
+    except Exception:
         return None
 
 
-# ---------------------------------------------------------
-# SCAN BUTTON
-# ---------------------------------------------------------
+# =========================================================
+# SIDEBAR FILTERS
+# =========================================================
 
-if st.button("🔍 Scan Nifty 100", type="primary"):
+st.sidebar.header("🔍 Screener Filters")
 
-    with st.spinner("Getting latest Nifty 100 constituents..."):
-
-        try:
-            stocks = get_nifty100_stocks()
-
-        except Exception as e:
-
-            st.error(
-                "Unable to download the latest Nifty 100 constituent list."
-            )
-
-            st.write(str(e))
-
-            st.stop()
-
-    st.info(
-        f"Latest Nifty 100 list loaded: {len(stocks)} stocks"
-    )
-
-    results = []
-
-    progress = st.progress(0)
-
-    for i, stock in enumerate(stocks):
-
-        result = analyze_stock(stock)
-
-        if result is not None:
-            results.append(result)
-
-        progress.progress(
-            (i + 1) / len(stocks)
-        )
-
-    progress.empty()
-
-    if results:
-
-        result_df = pd.DataFrame(results)
-
-        # -------------------------------------------------
-        # SORT BY 1 DAY RETURN
-        # -------------------------------------------------
-
-        result_df = result_df.sort_values(
-            "1D Return %",
-            ascending=False
-        ).reset_index(drop=True)
-
-        st.subheader(
-            f"📋 Results — {len(result_df)} stocks"
-        )
-
-        # -------------------------------------------------
-        # DISPLAY TABLE
-        # -------------------------------------------------
-
-        st.dataframe(
-            result_df,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        # -------------------------------------------------
-        # DOWNLOAD
-        # -------------------------------------------------
-
-        csv = result_df.to_csv(index=False)
-
-        st.download_button(
-            label="⬇️ Download Results",
-            data=csv,
-            file_name="nifty100_screener.csv",
-            mime="text/csv"
-        )
-
-        st.caption(
-            "Data is based on the latest available market prices."
-        )
-
-    else:
-
-        st.error(
-            "No stock data could be downloaded."
-        )
-
-
-# ---------------------------------------------------------
-# INFORMATION
-# ---------------------------------------------------------
-
-st.divider()
-
-st.caption(
-    "Nifty 100 constituents are fetched automatically from "
-    "NSE Indices. Price data is provided by Yahoo Finance."
+min_1d = st.sidebar.number_input(
+    "Minimum 1D Return %",
+    value=-100.0,
+    step=1.0
 )
+
+min_1w = st.sidebar.number_input(
+    "Minimum 1W Return %",
+    value=-100.0,
+    step=1.0
+)
+
+min_1m = st.sidebar.number_input(
+    "Minimum 1M Return %",
+    value=-100.0,
