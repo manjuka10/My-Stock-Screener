@@ -30,6 +30,7 @@ st.subheader("Nifty 100 Technical Screener")
 
 # =========================================================
 # NIFTY 100 CONSTITUENTS
+# Cached for 24 hours
 # =========================================================
 
 NIFTY100_URL = (
@@ -105,11 +106,13 @@ def get_nifty100_list():
         if symbol:
             symbols.append(symbol)
 
+    # Remove duplicates
     symbols = list(
         dict.fromkeys(symbols)
     )
 
     if len(symbols) < 95:
+
         raise ValueError(
             f"Only {len(symbols)} stocks found "
             "in Nifty 100 list."
@@ -120,9 +123,13 @@ def get_nifty100_list():
 
 # =========================================================
 # DOWNLOAD BULK STOCK DATA
+#
+# IMPORTANT:
+# ttl=0 means NO CACHE.
+# Every Scan requests fresh data.
 # =========================================================
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=0)
 def download_stock_data(symbols):
 
     tickers = [
@@ -145,9 +152,11 @@ def download_stock_data(symbols):
 
 # =========================================================
 # DOWNLOAD INDIVIDUAL STOCK
+#
+# NO CACHE
 # =========================================================
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=0)
 def download_single_stock(symbol):
 
     ticker = symbol + ".NS"
@@ -166,6 +175,7 @@ def download_single_stock(symbol):
         if df is None or df.empty:
             return None
 
+        # Handle MultiIndex
         if isinstance(
             df.columns,
             pd.MultiIndex
@@ -306,11 +316,12 @@ def calculate_stock_data(
             errors="coerce"
         ).dropna()
 
+        # Minimum history needed
         if len(close) < 22:
             return None
 
         # -------------------------------------------------
-        # PRICE
+        # CURRENT PRICE
         # -------------------------------------------------
 
         price = float(
@@ -394,34 +405,52 @@ def calculate_stock_data(
         # DISTANCE FROM 52 WEEK HIGH
         # -------------------------------------------------
 
-        from_52w_high = (
-            price
-            /
-            week52_high
-            - 1
-        ) * 100
+        if week52_high != 0:
+
+            from_52w_high = (
+                price
+                /
+                week52_high
+                - 1
+            ) * 100
+
+        else:
+
+            from_52w_high = np.nan
 
         # -------------------------------------------------
         # DISTANCE FROM 52 WEEK LOW
         # -------------------------------------------------
 
-        from_52w_low = (
-            price
-            /
-            week52_low
-            - 1
-        ) * 100
+        if week52_low != 0:
+
+            from_52w_low = (
+                price
+                /
+                week52_low
+                - 1
+            ) * 100
+
+        else:
+
+            from_52w_low = np.nan
 
         # -------------------------------------------------
         # DISTANCE FROM 21 EMA
         # -------------------------------------------------
 
-        from_21_ema = (
-            price
-            /
-            ema21
-            - 1
-        ) * 100
+        if ema21 != 0:
+
+            from_21_ema = (
+                price
+                /
+                ema21
+                - 1
+            ) * 100
+
+        else:
+
+            from_21_ema = np.nan
 
         # -------------------------------------------------
         # TREND
@@ -541,7 +570,7 @@ if st.button(
 ):
 
     # =====================================================
-    # GET CURRENT NIFTY 100
+    # GET CURRENT NIFTY 100 LIST
     # =====================================================
 
     try:
@@ -565,11 +594,11 @@ if st.button(
         st.stop()
 
     # =====================================================
-    # BULK DOWNLOAD
+    # FRESH BULK DOWNLOAD
     # =====================================================
 
     with st.spinner(
-        "Downloading Nifty 100 market data..."
+        "Downloading fresh Nifty 100 data..."
     ):
 
         try:
@@ -602,7 +631,7 @@ if st.button(
             bulk_data
         )
 
-        # If missing, try individually
+        # If missing, try individual download
         if close is None or len(close) < 22:
 
             close = download_single_stock(
@@ -685,7 +714,7 @@ if st.button(
     )
 
     # =====================================================
-    # LAST UPDATE TIME
+    # LAST UPDATED TIME
     # =====================================================
 
     ist = ZoneInfo(
@@ -711,7 +740,7 @@ if st.button(
     )
 
     # =====================================================
-    # SHOW MISSING STOCKS
+    # MISSING STOCKS
     # =====================================================
 
     if missing_stocks:
@@ -786,7 +815,7 @@ if st.button(
     )
 
     # =====================================================
-    # DISPLAY
+    # DISPLAY TABLE
     # =====================================================
 
     st.dataframe(
@@ -809,4 +838,4 @@ if st.button(
         data=csv_data,
         file_name="nifty100_screener.csv",
         mime="text/csv"
-            )
+)
