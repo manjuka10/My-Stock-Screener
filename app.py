@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 
 # ============================================================
-# PAGE
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -18,6 +18,11 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+
+# ============================================================
+# TITLE
+# ============================================================
 
 st.title("📊 My Stock Screener")
 st.subheader("Nifty 100 Technical Screener")
@@ -206,7 +211,8 @@ def get_ticker_data(data, ticker):
         ]
 
         available = [
-            c for c in wanted
+            c
+            for c in wanted
             if c in result.columns
         ]
 
@@ -263,8 +269,8 @@ def get_date(value):
 #    ↓
 # 28-Jul close
 #
-# If 28-Jul is a holiday, use the latest available
-# trading day on or before 28-Jul.
+# If target is holiday/weekend,
+# use latest available trading day before/on target.
 # ============================================================
 
 def get_previous_month_close(
@@ -399,7 +405,7 @@ def calculate_stock(
     )
 
     # --------------------------------------------------------
-    # HISTORICAL DAILY DATA
+    # HISTORICAL DATA
     # --------------------------------------------------------
 
     historical = daily.loc[
@@ -540,11 +546,11 @@ def calculate_stock(
     )
 
     # ========================================================
-    # 52 WEEK ACTUAL HIGH / LOW
+    # 52 WEEK HIGH / LOW
     #
-    # Uses High and Low columns.
+    # ACTUAL HIGH AND LOW
     #
-    # NO 220 TRADING-DAY RULE.
+    # NO 220 TRADING-DAY RULE
     # ========================================================
 
     cutoff = (
@@ -568,7 +574,9 @@ def calculate_stock(
 
         last_52w = historical.copy()
 
-    # Actual HIGH
+    # --------------------------------------------------------
+    # 52 WEEK HIGH
+    # --------------------------------------------------------
 
     if "High" in last_52w.columns:
 
@@ -591,7 +599,9 @@ def calculate_stock(
 
         week52_high = np.nan
 
-    # Actual LOW
+    # --------------------------------------------------------
+    # 52 WEEK LOW
+    # --------------------------------------------------------
 
     if "Low" in last_52w.columns:
 
@@ -615,7 +625,7 @@ def calculate_stock(
         week52_low = np.nan
 
     # ========================================================
-    # DISTANCE FROM 52W HIGH
+    # DISTANCE FROM 52 WEEK HIGH
     # ========================================================
 
     if (
@@ -634,7 +644,7 @@ def calculate_stock(
         from_high = np.nan
 
     # ========================================================
-    # DISTANCE FROM 52W LOW
+    # DISTANCE FROM 52 WEEK LOW
     # ========================================================
 
     if (
@@ -696,7 +706,7 @@ def calculate_stock(
         trend = "Neutral"
 
     # ========================================================
-    # RESULT
+    # RETURN RESULT
     # ========================================================
 
     return {
@@ -723,7 +733,43 @@ def calculate_stock(
 
 
 # ============================================================
-# MAIN BUTTON
+# TREND COLOUR FUNCTION
+# ============================================================
+
+def colour_trend(value):
+
+    if value == "Bullish":
+
+        return (
+            "background-color: green;"
+            "color: white;"
+            "font-weight: bold;"
+            "text-align: center;"
+        )
+
+    elif value == "Neutral":
+
+        return (
+            "background-color: orange;"
+            "color: black;"
+            "font-weight: bold;"
+            "text-align: center;"
+        )
+
+    elif value == "Bearish":
+
+        return (
+            "background-color: red;"
+            "color: white;"
+            "font-weight: bold;"
+            "text-align: center;"
+        )
+
+    return ""
+
+
+# ============================================================
+# SCAN BUTTON
 # ============================================================
 
 if st.button(
@@ -732,7 +778,7 @@ if st.button(
 ):
 
     # ========================================================
-    # GET STOCK LIST
+    # GET NIFTY 100
     # ========================================================
 
     try:
@@ -808,7 +854,7 @@ if st.button(
             )
 
     # ========================================================
-    # CURRENT DATE
+    # CURRENT IST TIME
     # ========================================================
 
     ist = ZoneInfo(
@@ -822,7 +868,7 @@ if st.button(
     today = now_ist.date()
 
     # ========================================================
-    # CALCULATE
+    # CALCULATE ALL STOCKS
     # ========================================================
 
     results = []
@@ -844,9 +890,7 @@ if st.button(
 
             if result is not None:
 
-                results.append(
-                    result
-                )
+                results.append(result)
 
         except Exception:
 
@@ -863,7 +907,7 @@ if st.button(
     progress.empty()
 
     # ========================================================
-    # CHECK
+    # CHECK RESULTS
     # ========================================================
 
     if not results:
@@ -875,7 +919,7 @@ if st.button(
         st.stop()
 
     # ========================================================
-    # DATAFRAME
+    # CREATE DATAFRAME
     # ========================================================
 
     df = pd.DataFrame(
@@ -915,7 +959,7 @@ if st.button(
     # ========================================================
 
     df = df.sort_values(
-        "From 21 EMA %",
+        by="From 21 EMA %",
         ascending=False,
         na_position="last"
     )
@@ -955,7 +999,7 @@ if st.button(
         ).round(2)
 
     # ========================================================
-    # TIMESTAMP
+    # UPDATED TIME
     # ========================================================
 
     updated_time = now_ist.strftime(
@@ -964,42 +1008,4 @@ if st.button(
 
     st.success(
         "🕐 Last updated: "
-        + updated_time
-    )
-
-    st.subheader(
-        "📋 Results — "
-        + str(len(df))
-        + " stocks"
-    )
-
-    # ========================================================
-    # DISPLAY TABLE
-    #
-    # NO PANDAS STYLER HERE.
-    # This avoids the table disappearing.
-    # ========================================================
-
-    st.dataframe(
-        df,
-        use_container_width=True,
-        height=650,
-        hide_index=True
-    )
-
-    # ========================================================
-    # DOWNLOAD
-    # ========================================================
-
-    csv_data = df.to_csv(
-        index=False
-    ).encode(
-        "utf-8"
-    )
-
-    st.download_button(
-        label="⬇️ Download Results CSV",
-        data=csv_data,
-        file_name="nifty100_screener.csv",
-        mime="text/csv"
-    )
+        + u
