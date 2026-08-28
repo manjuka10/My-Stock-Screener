@@ -315,7 +315,7 @@ def calculate_stock(
     ticker = symbol + ".NS"
 
     # --------------------------------------------------------
-    # DAILY
+    # DAILY DATA
     # --------------------------------------------------------
 
     daily = get_ticker_data(
@@ -337,7 +337,7 @@ def calculate_stock(
         return None
 
     # --------------------------------------------------------
-    # INTRADAY
+    # INTRADAY DATA
     # --------------------------------------------------------
 
     intraday = get_ticker_data(
@@ -367,7 +367,7 @@ def calculate_stock(
                 prices.iloc[-1]
             )
 
-    # Fallback
+    # Fallback to latest daily close
 
     if (
         not np.isfinite(current_price)
@@ -391,7 +391,7 @@ def calculate_stock(
     )
 
     # --------------------------------------------------------
-    # HISTORICAL DAILY DATA
+    # HISTORICAL DATA
     # --------------------------------------------------------
 
     historical = daily.loc[
@@ -530,8 +530,7 @@ def calculate_stock(
     )
 
     # ========================================================
-    # 52 WEEK HIGH / LOW
-    # ACTUAL HIGH AND LOW
+    # 52 WEEK ACTUAL HIGH / LOW
     # NO 220 TRADING-DAY RULE
     # ========================================================
 
@@ -557,7 +556,7 @@ def calculate_stock(
         last_52w = historical.copy()
 
     # --------------------------------------------------------
-    # 52 WEEK HIGH
+    # ACTUAL 52 WEEK HIGH
     # --------------------------------------------------------
 
     if "High" in last_52w.columns:
@@ -582,7 +581,7 @@ def calculate_stock(
         week52_high = np.nan
 
     # --------------------------------------------------------
-    # 52 WEEK LOW
+    # ACTUAL 52 WEEK LOW
     # --------------------------------------------------------
 
     if "Low" in last_52w.columns:
@@ -715,6 +714,24 @@ def calculate_stock(
 
 
 # ============================================================
+# TREND COLOUR
+# ============================================================
+
+def trend_colour(value):
+
+    if value == "Bullish":
+        return "background-color: green; color: white; font-weight: bold;"
+
+    if value == "Neutral":
+        return "background-color: orange; color: black; font-weight: bold;"
+
+    if value == "Bearish":
+        return "background-color: red; color: white; font-weight: bold;"
+
+    return ""
+
+
+# ============================================================
 # SCAN BUTTON
 # ============================================================
 
@@ -724,7 +741,7 @@ if st.button(
 ):
 
     # ========================================================
-    # GET NIFTY 100
+    # GET STOCK LIST
     # ========================================================
 
     try:
@@ -784,10 +801,8 @@ if st.button(
 
         try:
 
-            intraday_data = (
-                download_intraday_data(
-                    symbols
-                )
+            intraday_data = download_intraday_data(
+                symbols
             )
 
         except Exception:
@@ -800,7 +815,7 @@ if st.button(
             )
 
     # ========================================================
-    # CURRENT TIME
+    # CURRENT DATE / TIME
     # ========================================================
 
     ist = ZoneInfo(
@@ -814,7 +829,7 @@ if st.button(
     today = now_ist.date()
 
     # ========================================================
-    # CALCULATE
+    # CALCULATE ALL STOCKS
     # ========================================================
 
     results = []
@@ -875,7 +890,7 @@ if st.button(
     )
 
     # ========================================================
-    # COLUMN ORDER
+    # EXACT COLUMN ORDER
     # ========================================================
 
     df = df[
@@ -917,7 +932,7 @@ if st.button(
     )
 
     # ========================================================
-    # ROUND TO 2 DECIMALS
+    # ROUND NUMBERS TO 2 DECIMALS
     # ========================================================
 
     numeric_columns = [
@@ -966,32 +981,14 @@ if st.button(
     )
 
     # ========================================================
-    # TREND COLOURS
+    # TABLE STYLE
     #
-    # Uses Streamlit's native dataframe styling.
-    # Calculations are NOT changed.
-    # ========================================================
-
-    def trend_background(value):
-
-        if value == "Bullish":
-            return "background-color: green; color: white;"
-
-        if value == "Neutral":
-            return "background-color: orange; color: black;"
-
-        if value == "Bearish":
-            return "background-color: red; color: white;"
-
-        return ""
-
-
-    # ========================================================
-    # STYLE TABLE
+    # ONLY TREND COLUMN IS COLOURED.
+    # ALL OTHER DATA REMAINS UNCHANGED.
     # ========================================================
 
     styled_df = df.style.map(
-        trend_background,
+        trend_colour,
         subset=["Trend"]
     )
 
@@ -999,26 +996,4 @@ if st.button(
     # DISPLAY TABLE
     # ========================================================
 
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        height=650,
-        hide_index=True
-    )
-
-    # ========================================================
-    # DOWNLOAD CSV
-    # ========================================================
-
-    csv_data = df.to_csv(
-        index=False
-    ).encode(
-        "utf-8"
-    )
-
-    st.download_button(
-        label="⬇️ Download Results CSV",
-        data=csv_data,
-        file_name="nifty100_screener.csv",
-        mime="text/csv"
-    )
+   
