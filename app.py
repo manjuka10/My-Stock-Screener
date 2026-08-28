@@ -14,38 +14,27 @@ from zoneinfo import ZoneInfo
 # =========================================================
 
 st.set_page_config(
-    page_title="My Stock Screener",
+    page_title="Nifty 100 Technical Screener",
     page_icon="📊",
     layout="wide"
 )
 
+st.title("📊 Nifty 100 Technical Screener")
 
-# =========================================================
-# TITLE
-# =========================================================
-
-st.title("📊 My Stock Screener")
-st.subheader("Nifty 100 Technical Screener")
-
-st.caption(
-    "Latest available Yahoo Finance intraday price is used for calculations. "
+st.write(
+    "Latest available intraday price is used for calculations. "
     "Yahoo Finance data may be delayed during market hours."
 )
 
 
 # =========================================================
-# NIFTY 100 URL
+# NIFTY 100 CONSTITUENTS
 # =========================================================
 
 NIFTY100_URL = (
-    "https://www.niftyindices.com/IndexConstituent/"
-    "ind_nifty100list.csv"
+    "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 )
 
-
-# =========================================================
-# GET NIFTY 100 LIST
-# =========================================================
 
 @st.cache_data(ttl=86400)
 def get_nifty100_list():
@@ -56,10 +45,7 @@ def get_nifty100_list():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0 Safari/537.36"
         ),
-        "Accept": (
-            "text/csv,application/csv,text/plain,"
-            "*/*"
-        ),
+        "Accept": "text/csv,application/csv,text/plain,*/*",
         "Referer": "https://www.niftyindices.com/"
     }
 
@@ -97,12 +83,10 @@ def get_nifty100_list():
     for i, col in enumerate(header):
 
         if col.lower() == "symbol":
-
             symbol_index = i
             break
 
     if symbol_index is None:
-
         raise ValueError(
             "Symbol column not found."
         )
@@ -123,12 +107,6 @@ def get_nifty100_list():
     symbols = list(
         dict.fromkeys(symbols)
     )
-
-    if len(symbols) < 80:
-
-        raise ValueError(
-            f"Only {len(symbols)} stocks found."
-        )
 
     return symbols
 
@@ -159,7 +137,7 @@ def download_historical_data(symbols):
 
 
 # =========================================================
-# DOWNLOAD LATEST INTRADAY DATA
+# DOWNLOAD INTRADAY DATA
 # =========================================================
 
 @st.cache_data(ttl=300)
@@ -174,7 +152,7 @@ def download_intraday_data(symbols):
 
         data = yf.download(
             tickers=tickers,
-            period="5d",
+            period="1d",
             interval="5m",
             auto_adjust=False,
             progress=False,
@@ -190,171 +168,139 @@ def download_intraday_data(symbols):
 
 
 # =========================================================
-# GET STOCK DATAFRAME FROM YFINANCE
+# GET CURRENT / LIVE PRICE
 # =========================================================
 
-def get_ticker_dataframe(
-    data,
-    ticker
-):
-
-    try:
-
-        if data is None:
-            return None
-
-        if data.empty:
-            return None
-
-        # MultiIndex format
-        if isinstance(
-            data.columns,
-            pd.MultiIndex
-        ):
-
-            level0 = (
-                data.columns
-                .get_level_values(0)
-            )
-
-            level1 = (
-                data.columns
-                .get_level_values(1)
-            )
-
-            # Standard yfinance format
-            if ticker in level0:
-
-                df = data[ticker].copy()
-
-            elif ticker in level1:
-
-                df = data.xs(
-                    ticker,
-                    axis=1,
-                    level=1
-                ).copy()
-
-            else:
-
-                return None
-
-        else:
-
-            df = data.copy()
-
-        if df.empty:
-            return None
-
-        if "Close" not in df.columns:
-            return None
-
-        return df
-
-    except Exception:
-
-        return None
-
-
-# =========================================================
-# GET LATEST PRICE
-# =========================================================
-
-def get_latest_price(
+def get_current_price(
     symbol,
-    intraday_data,
-    historical_data
+    historical_data,
+    intraday_data
 ):
 
     ticker = symbol + ".NS"
 
     # -----------------------------------------------------
-    # First try intraday data
+    # FIRST: Try latest 5-minute intraday price
     # -----------------------------------------------------
 
     try:
 
-        df_intraday = get_ticker_dataframe(
-            intraday_data,
-            ticker
-        )
-
         if (
-            df_intraday is not None
-            and not df_intraday.empty
+            intraday_data is not None
+            and isinstance(
+                intraday_data.columns,
+                pd.MultiIndex
+            )
         ):
 
-            close = (
-                pd.to_numeric(
-                    df_intraday["Close"],
-                    errors="coerce"
-                )
-                .dropna()
-            )
+            if ticker in (
+                intraday_data
+                .columns
+                .get_level_values(0)
+            ):
 
-            if not close.empty:
-
-                price = float(
-                    close.iloc[-1]
+                intraday_df = (
+                    intraday_data[ticker]
+                    .copy()
                 )
 
                 if (
-                    np.isfinite(price)
-                    and price > 0
+                    not intraday_df.empty
+                    and "Close" in intraday_df.columns
                 ):
 
-                    return price
+                    prices = (
+                        intraday_df["Close"]
+                        .dropna()
+                    )
+
+                    if len(prices) > 0:
+
+                        return float(
+                            prices.iloc[-1]
+                        )
 
     except Exception:
-
         pass
 
+
     # -----------------------------------------------------
-    # Fallback to latest daily data
+    # SECOND: Try Yahoo fast_info
     # -----------------------------------------------------
 
     try:
 
-        df_daily = get_ticker_dataframe(
-            historical_data,
-            ticker
+        ticker_obj = yf.Ticker(ticker)
+
+        fast_info = ticker_obj.fast_info
+
+        last_price = fast_info.get(
+            "last_price",
+            None
         )
 
         if (
-            df_daily is not None
-            and not df_daily.empty
+            last_price is not None
+            and np.isfinite(float(last_price))
+        ):
+
+            return float(last_price)
+
+    except Exception:
+        pass
+
+
+    # -----------------------------------------------------
+    # THIRD: Use latest historical close
+    # -----------------------------------------------------
+
+    try:
+
+        if isinstance(
+            historical_data.columns,
+            pd.MultiIndex
+        ):
+
+            if ticker not in (
+                historical_data
+                .columns
+                .get_level_values(0)
+            ):
+
+                return None
+
+            df = historical_data[
+                ticker
+            ].copy()
+
+        else:
+
+            df = historical_data.copy()
+
+        if (
+            not df.empty
+            and "Close" in df.columns
         ):
 
             close = (
-                pd.to_numeric(
-                    df_daily["Close"],
-                    errors="coerce"
-                )
+                df["Close"]
                 .dropna()
             )
 
-            if not close.empty:
+            if len(close) > 0:
 
-                price = float(
+                return float(
                     close.iloc[-1]
                 )
 
-                if (
-                    np.isfinite(price)
-                    and price > 0
-                ):
-
-                    return price
-
     except Exception:
-
         pass
 
     return None
 
 
 # =========================================================
-# CALCULATE STOCK
+# CALCULATE STOCK DATA
 # =========================================================
 
 def calculate_stock_data(
@@ -368,118 +314,187 @@ def calculate_stock_data(
     try:
 
         # -------------------------------------------------
-        # DAILY DATA
+        # GET HISTORICAL DAILY DATA
         # -------------------------------------------------
 
-        df_daily = get_ticker_dataframe(
-            historical_data,
-            ticker
-        )
-
-        if (
-            df_daily is None
-            or df_daily.empty
+        if isinstance(
+            historical_data.columns,
+            pd.MultiIndex
         ):
 
-            return None
+            if ticker not in (
+                historical_data
+                .columns
+                .get_level_values(0)
+            ):
 
-        close = pd.to_numeric(
-            df_daily["Close"],
-            errors="coerce"
-        ).dropna()
+                return {
+                    "Stock": symbol,
+                    "Data Status": "Unavailable"
+                }
+
+            df = historical_data[
+                ticker
+            ].copy()
+
+        else:
+
+            df = historical_data.copy()
+
+        if df.empty:
+
+            return {
+                "Stock": symbol,
+                "Data Status": "Unavailable"
+            }
+
+        if "Close" not in df.columns:
+
+            return {
+                "Stock": symbol,
+                "Data Status": "Unavailable"
+            }
+
+        close = (
+            df["Close"]
+            .dropna()
+            .astype(float)
+        )
 
         if len(close) < 220:
 
-            return None
+            return {
+                "Stock": symbol,
+                "Data Status": "Insufficient data"
+            }
+
 
         # -------------------------------------------------
-        # PREVIOUS TRADING DAY CLOSE
-        #
-        # This is used for 1D return.
+        # CURRENT / INTRADAY PRICE
         # -------------------------------------------------
 
-        previous_close = float(
-            close.iloc[-2]
-        )
-
-        # -------------------------------------------------
-        # LATEST AVAILABLE PRICE
-        #
-        # Intraday price is preferred.
-        # -------------------------------------------------
-
-        current_price = get_latest_price(
+        current_price = get_current_price(
             symbol,
-            intraday_data,
-            historical_data
+            historical_data,
+            intraday_data
         )
 
         if current_price is None:
 
-            return None
+            return {
+                "Stock": symbol,
+                "Data Status": "Unavailable"
+            }
 
-        price = float(
-            current_price
+
+        price = float(current_price)
+
+
+        # -------------------------------------------------
+        # IMPORTANT
+        #
+        # Replace today's historical close with
+        # CURRENT PRICE for calculations.
+        #
+        # Therefore EMA, 52W High/Low and returns
+        # respond to the current price.
+        # -------------------------------------------------
+
+        calculation_close = close.copy()
+
+        today = pd.Timestamp.now(
+            tz="Asia/Kolkata"
+        ).normalize().tz_localize(None)
+
+        last_date = (
+            calculation_close.index[-1]
         )
 
-        # -------------------------------------------------
-        # CREATE CALCULATION SERIES
-        #
-        # Replace the latest daily close with
-        # the latest available intraday price.
-        #
-        # This makes EMA calculations incorporate
-        # the current/latest price.
-        # -------------------------------------------------
+        if hasattr(last_date, "tz"):
 
-        calc_close = close.copy()
+            last_date = (
+                last_date
+                .tz_localize(None)
+            )
 
-        calc_close.iloc[-1] = price
+        last_date = pd.Timestamp(
+            last_date
+        ).normalize()
+
+
+        if last_date == today:
+
+            calculation_close.iloc[-1] = price
+
+        else:
+
+            calculation_close.loc[
+                today
+            ] = price
+
+        calculation_close = (
+            calculation_close
+            .sort_index()
+        )
+
 
         # -------------------------------------------------
         # 1 DAY RETURN
         #
-        # Current price vs previous trading day close.
+        # Current price vs previous trading day close
         # -------------------------------------------------
+
+        previous_close = float(
+            close.iloc[-1]
+        )
 
         one_day_return = (
             (price / previous_close) - 1
         ) * 100
 
+
         # -------------------------------------------------
         # 1 WEEK RETURN
         #
-        # Current price vs 5 trading sessions ago.
+        # Current price vs 5 trading sessions ago
         # -------------------------------------------------
 
-        one_week_base = float(
-            close.iloc[-6]
-        )
+        if len(close) >= 6:
 
-        one_week_return = (
-            (price / one_week_base) - 1
-        ) * 100
+            one_week_return = (
+                (price / float(close.iloc[-6])) - 1
+            ) * 100
+
+        else:
+
+            one_week_return = np.nan
+
 
         # -------------------------------------------------
         # 1 MONTH RETURN
         #
-        # Current price vs 21 trading sessions ago.
+        # Current price vs 21 trading sessions ago
         # -------------------------------------------------
 
-        one_month_base = float(
-            close.iloc[-22]
-        )
+        if len(close) >= 22:
 
-        one_month_return = (
-            (price / one_month_base) - 1
-        ) * 100
+            one_month_return = (
+                (price / float(close.iloc[-22])) - 1
+            ) * 100
+
+        else:
+
+            one_month_return = np.nan
+
 
         # -------------------------------------------------
         # EMA
+        #
+        # Current price is included.
         # -------------------------------------------------
 
         ema21 = (
-            calc_close
+            calculation_close
             .ewm(
                 span=21,
                 adjust=False
@@ -489,7 +504,7 @@ def calculate_stock_data(
         )
 
         ema50 = (
-            calc_close
+            calculation_close
             .ewm(
                 span=50,
                 adjust=False
@@ -499,7 +514,7 @@ def calculate_stock_data(
         )
 
         ema200 = (
-            calc_close
+            calculation_close
             .ewm(
                 span=200,
                 adjust=False
@@ -508,48 +523,53 @@ def calculate_stock_data(
             .iloc[-1]
         )
 
+
         # -------------------------------------------------
         # 52 WEEK HIGH / LOW
         #
-        # Use historical prices.
-        # Current price is also included.
+        # Current price is included.
         # -------------------------------------------------
 
-        last_252 = close.tail(252)
-
-        week52_high = max(
-            float(last_252.max()),
-            price
+        last_252 = (
+            calculation_close
+            .tail(252)
         )
 
-        week52_low = min(
-            float(last_252.min()),
-            price
+        week52_high = float(
+            last_252.max()
         )
+
+        week52_low = float(
+            last_252.min()
+        )
+
 
         # -------------------------------------------------
-        # FROM 52W HIGH
+        # DISTANCE FROM 52 WEEK HIGH
         # -------------------------------------------------
 
         from_52w_high = (
             (price / week52_high) - 1
         ) * 100
 
+
         # -------------------------------------------------
-        # FROM 52W LOW
+        # DISTANCE FROM 52 WEEK LOW
         # -------------------------------------------------
 
         from_52w_low = (
             (price / week52_low) - 1
         ) * 100
 
+
         # -------------------------------------------------
-        # FROM 21 EMA
+        # DISTANCE FROM 21 EMA
         # -------------------------------------------------
 
         from_21_ema = (
             (price / ema21) - 1
         ) * 100
+
 
         # -------------------------------------------------
         # TREND
@@ -574,6 +594,7 @@ def calculate_stock_data(
         else:
 
             trend = "Neutral"
+
 
         # -------------------------------------------------
         # RESULT
@@ -601,21 +622,24 @@ def calculate_stock_data(
 
             "52W Low": week52_low,
 
-            "From 52W High %":
-                from_52w_high,
+            "From 52W High %": from_52w_high,
 
-            "From 52W Low %":
-                from_52w_low,
+            "From 52W Low %": from_52w_low,
 
-            "From 21 EMA %":
-                from_21_ema,
+            "From 21 EMA %": from_21_ema,
 
-            "Trend": trend
+            "Trend": trend,
+
+            "Data Status": "OK"
         }
 
-    except Exception:
 
-        return None
+    except Exception as e:
+
+        return {
+            "Stock": symbol,
+            "Data Status": "Unavailable"
+        }
 
 
 # =========================================================
@@ -659,6 +683,7 @@ if st.button(
     "🔍 Scan Nifty 100"
 ):
 
+
     # =====================================================
     # GET NIFTY 100
     # =====================================================
@@ -667,35 +692,56 @@ if st.button(
 
         symbols = get_nifty100_list()
 
-        st.info(
-            f"Current Nifty 100 list: "
-            f"{len(symbols)} stocks"
-        )
-
     except Exception as e:
 
         st.error(
-            "Unable to get the current "
-            "Nifty 100 list."
+            "Unable to get Nifty 100 list."
         )
 
         st.error(str(e))
 
         st.stop()
 
+
+    st.info(
+        f"Current Nifty 100 list: {len(symbols)} stocks"
+    )
+
+
     # =====================================================
-    # DOWNLOAD DATA
+    # DOWNLOAD HISTORICAL DATA
     # =====================================================
 
     with st.spinner(
-        "Downloading market data..."
+        "Downloading historical data..."
     ):
 
-        historical_data = (
-            download_historical_data(
-                symbols
+        try:
+
+            historical_data = (
+                download_historical_data(
+                    symbols
+                )
             )
-        )
+
+        except Exception as e:
+
+            st.error(
+                "Historical data download failed."
+            )
+
+            st.error(str(e))
+
+            st.stop()
+
+
+    # =====================================================
+    # DOWNLOAD INTRADAY DATA
+    # =====================================================
+
+    with st.spinner(
+        "Downloading latest intraday prices..."
+    ):
 
         intraday_data = (
             download_intraday_data(
@@ -703,13 +749,12 @@ if st.button(
             )
         )
 
+
     # =====================================================
     # CALCULATE
     # =====================================================
 
     results = []
-
-    unavailable = []
 
     progress = st.progress(0)
 
@@ -723,13 +768,7 @@ if st.button(
             intraday_data
         )
 
-        if result is not None:
-
-            results.append(result)
-
-        else:
-
-            unavailable.append(symbol)
+        results.append(result)
 
         progress.progress(
             int(
@@ -739,6 +778,7 @@ if st.button(
 
     progress.empty()
 
+
     # =====================================================
     # CREATE DATAFRAME
     # =====================================================
@@ -747,8 +787,9 @@ if st.button(
         results
     )
 
+
     # =====================================================
-    # REQUIRED COLUMNS
+    # COLUMN ORDER
     # =====================================================
 
     columns = [
@@ -779,103 +820,53 @@ if st.button(
 
         "From 21 EMA %",
 
-        "Trend"
+        "Trend",
+
+        "Data Status"
     ]
 
-    # =====================================================
-    # ADD UNAVAILABLE STOCKS
-    #
-    # This guarantees all Nifty 100 stocks
-    # remain visible.
-    # =====================================================
+    df = df[
+        [
+            col
+            for col in columns
+            if col in df.columns
+        ]
+    ]
 
-    unavailable_rows = []
-
-    for symbol in unavailable:
-
-        unavailable_rows.append({
-
-            "Stock": symbol,
-
-            "Price": np.nan,
-
-            "1D Return %": np.nan,
-
-            "1W Return %": np.nan,
-
-            "1M Return %": np.nan,
-
-            "21 EMA": np.nan,
-
-            "50 EMA": np.nan,
-
-            "200 EMA": np.nan,
-
-            "52W High": np.nan,
-
-            "52W Low": np.nan,
-
-            "From 52W High %": np.nan,
-
-            "From 52W Low %": np.nan,
-
-            "From 21 EMA %": np.nan,
-
-            "Trend": "Unavailable"
-        })
-
-    if unavailable_rows:
-
-        df_unavailable = pd.DataFrame(
-            unavailable_rows
-        )
-
-        df = pd.concat(
-            [
-                df,
-                df_unavailable
-            ],
-            ignore_index=True
-        )
-
-    # =====================================================
-    # FORCE COLUMN ORDER
-    # =====================================================
-
-    df = df[columns]
 
     # =====================================================
     # SORT
     #
-    # Available stocks first.
-    # Then sort by distance from 21 EMA.
+    # Only stocks with valid calculations first
     # =====================================================
 
-    df["_available"] = (
-        df["Price"].notna()
-    )
+    if "From 21 EMA %" in df.columns:
 
-    df = df.sort_values(
-        by=[
-            "_available",
-            "From 21 EMA %"
-        ],
-        ascending=[
-            False,
-            False
-        ]
-    )
+        df["_sort"] = (
+            pd.to_numeric(
+                df["From 21 EMA %"],
+                errors="coerce"
+            )
+        )
 
-    df = df.drop(
-        columns=["_available"]
-    )
+        df = df.sort_values(
+            by="_sort",
+            ascending=False,
+            na_position="last"
+        )
+
+        df = df.drop(
+            columns=["_sort"]
+        )
+
 
     df = df.reset_index(
         drop=True
     )
 
+
     # =====================================================
-    # LAST UPDATED
+    # UPDATED TIME
     # =====================================================
 
     ist = ZoneInfo(
@@ -889,9 +880,9 @@ if st.button(
     )
 
     st.success(
-        f"🕐 Last updated: "
-        f"{updated_time}"
+        f"🕐 Last updated: {updated_time}"
     )
+
 
     # =====================================================
     # RESULT COUNT
@@ -901,19 +892,29 @@ if st.button(
         f"📋 Results — {len(df)} stocks"
     )
 
+
     # =====================================================
-    # UNAVAILABLE MESSAGE
+    # SHOW DATA PROBLEMS
     # =====================================================
 
-    if unavailable:
+    unavailable = df[
+        df["Data Status"] != "OK"
+    ]
+
+    if len(unavailable) > 0:
 
         st.warning(
-            "Intraday/historical data unavailable for: "
-            + ", ".join(unavailable)
+            "Data unavailable for: "
+            + ", ".join(
+                unavailable["Stock"]
+                .astype(str)
+                .tolist()
+            )
         )
 
+
     # =====================================================
-    # DISPLAY COPY
+    # FORMAT
     # =====================================================
 
     display_df = df.copy()
@@ -947,24 +948,24 @@ if st.button(
 
     for col in number_columns:
 
-        display_df[col] = pd.to_numeric(
-            display_df[col],
-            errors="coerce"
-        ).round(2)
+        if col in display_df.columns:
+
+            display_df[col] = pd.to_numeric(
+                display_df[col],
+                errors="coerce"
+            ).round(2)
+
 
     # =====================================================
-    # STYLE TREND
+    # STYLE
     # =====================================================
 
     styled_df = (
-
         display_df.style
-
         .map(
             colour_trend,
             subset=["Trend"]
         )
-
         .format(
             {
                 "Price": "{:.2f}",
@@ -985,5 +986,9 @@ if st.button(
 
                 "52W Low": "{:.2f}",
 
-                "From 52W High %":
-          
+                "From 52W High %": "{:.2f}",
+
+                "From 52W Low %": "{:.2f}",
+
+                "From 21 EMA %": "{:.2f}"
+        
