@@ -19,17 +19,12 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# =========================================================
-# TITLE
-# =========================================================
-
 st.title("📊 My Stock Screener")
 st.subheader("Nifty 100 Technical Screener")
 
 
 # =========================================================
-# NIFTY 100 CONSTITUENTS
+# NIFTY 100 LIST
 # Cached for 24 hours
 # =========================================================
 
@@ -65,11 +60,11 @@ def get_nifty100_list():
         errors="replace"
     )
 
-    reader = csv.reader(
-        io.StringIO(text)
+    rows = list(
+        csv.reader(
+            io.StringIO(text)
+        )
     )
-
-    rows = list(reader)
 
     if len(rows) < 2:
         raise ValueError(
@@ -91,7 +86,7 @@ def get_nifty100_list():
 
     if symbol_index is None:
         raise ValueError(
-            "Symbol column not found in Nifty 100 CSV."
+            "Symbol column not found."
         )
 
     symbols = []
@@ -106,38 +101,34 @@ def get_nifty100_list():
         if symbol:
             symbols.append(symbol)
 
-    # Remove duplicates
     symbols = list(
         dict.fromkeys(symbols)
     )
 
     if len(symbols) < 95:
-
         raise ValueError(
-            f"Only {len(symbols)} stocks found "
-            "in Nifty 100 list."
+            f"Only {len(symbols)} stocks found."
         )
 
     return symbols
 
 
 # =========================================================
-# DOWNLOAD BULK STOCK DATA
+# DAILY DATA
 #
-# IMPORTANT:
-# ttl=0 means NO CACHE.
-# Every Scan requests fresh data.
+# NO CACHE
+# Used for historical calculations.
 # =========================================================
 
 @st.cache_data(ttl=0)
-def download_stock_data(symbols):
+def get_daily_data(symbols):
 
     tickers = [
         symbol + ".NS"
         for symbol in symbols
     ]
 
-    data = yf.download(
+    return yf.download(
         tickers=tickers,
         period="5y",
         interval="1d",
@@ -147,78 +138,83 @@ def download_stock_data(symbols):
         threads=True
     )
 
-    return data
-
 
 # =========================================================
-# DOWNLOAD INDIVIDUAL STOCK
+# INTRADAY PRICE
 #
 # NO CACHE
+# Latest available 5-minute price
 # =========================================================
 
 @st.cache_data(ttl=0)
-def download_single_stock(symbol):
+def get_intraday_price(symbol):
 
     ticker = symbol + ".NS"
 
     try:
 
-        df = yf.download(
+        data = yf.download(
             ticker,
-            period="5y",
-            interval="1d",
+            period="1d",
+            interval="5m",
             auto_adjust=False,
             progress=False,
             threads=False
         )
 
-        if df is None or df.empty:
+        if data is None or data.empty:
             return None
 
         # Handle MultiIndex
         if isinstance(
-            df.columns,
+            data.columns,
             pd.MultiIndex
         ):
 
-            if "Close" in df.columns.get_level_values(0):
+            if "Close" in data.columns.get_level_values(0):
 
-                df = df.xs(
+                close = data.xs(
                     "Close",
                     axis=1,
                     level=0
                 )
 
-                if isinstance(df, pd.DataFrame):
-                    df = df.iloc[:, 0]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
 
-            elif "Close" in df.columns.get_level_values(1):
+            elif "Close" in data.columns.get_level_values(1):
 
-                df = df.xs(
+                close = data.xs(
                     "Close",
                     axis=1,
                     level=1
                 )
 
-                if isinstance(df, pd.DataFrame):
-                    df = df.iloc[:, 0]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
 
-        elif "Close" in df.columns:
+            else:
+                return None
 
-            df = df["Close"]
+        else:
 
-        if isinstance(df, pd.DataFrame):
-            df = df.iloc[:, 0]
+            if "Close" not in data.columns:
+                return None
 
-        df = pd.to_numeric(
-            df,
+            close = data["Close"]
+
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+
+        close = pd.to_numeric(
+            close,
             errors="coerce"
         ).dropna()
 
-        if df.empty:
+        if close.empty:
             return None
 
-        return df
+        return float(close.iloc[-1])
 
     except Exception:
 
@@ -226,10 +222,10 @@ def download_single_stock(symbol):
 
 
 # =========================================================
-# GET CLOSE PRICE FROM BULK DATA
+# EXTRACT DAILY CLOSE
 # =========================================================
 
-def get_close_from_bulk(
+def get_daily_close(
     symbol,
     data
 ):
@@ -259,106 +255,135 @@ def get_close_from_bulk(
 
                 df = data[ticker]
 
-                if "Close" in df.columns:
+                if "Close" not in df.columns:
+                    return None
 
-                    close = df["Close"]
-
-                    return pd.to_numeric(
-                        close,
-                        errors="coerce"
-                    ).dropna()
+                close = df["Close"]
 
             # OHLC -> Ticker
-            if ticker in level1:
+            elif ticker in level1:
 
                 close = data[
                     "Close",
                     ticker
                 ]
 
-                return pd.to_numeric(
-                    close,
-                    errors="coerce"
-                ).dropna()
+            else:
 
-        elif "Close" in data.columns:
+                return None
+
+        else:
+
+            if "Close" not in data.columns:
+                return None
 
             close = data["Close"]
 
-            return pd.to_numeric(
-                close,
-                errors="coerce"
-            ).dropna()
-
-    except Exception:
-
-        pass
-
-    return None
-
-
-# =========================================================
-# CALCULATE STOCK DATA
-# =========================================================
-
-def calculate_stock_data(
-    symbol,
-    close
-):
-
-    try:
-
-        if close is None:
-            return None
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
 
         close = pd.to_numeric(
             close,
             errors="coerce"
         ).dropna()
 
-        # Minimum history needed
-        if len(close) < 22:
+        return close
+
+    except Exception:
+
+        return None
+
+
+# =========================================================
+# CALCULATE STOCK
+# =========================================================
+
+def calculate_stock(
+    symbol,
+    daily_close,
+    live_price
+):
+
+    try:
+
+        if daily_close is None:
             return None
 
-        # -------------------------------------------------
-        # CURRENT PRICE
-        # -------------------------------------------------
+        daily_close = pd.to_numeric(
+            daily_close,
+            errors="coerce"
+        ).dropna()
 
-        price = float(
-            close.iloc[-1]
+        if len(daily_close) < 220:
+            return None
+
+        # =================================================
+        # CURRENT PRICE
+        # =================================================
+
+        if live_price is None:
+
+            live_price = float(
+                daily_close.iloc[-1]
+            )
+
+        else:
+
+            live_price = float(
+                live_price
+            )
+
+        # =================================================
+        # PREVIOUS DAILY CLOSE
+        # =================================================
+
+        previous_close = float(
+            daily_close.iloc[-1]
         )
 
-        # -------------------------------------------------
+        # =================================================
         # RETURNS
-        # -------------------------------------------------
+        #
+        # Current live price is used.
+        # =================================================
 
         one_day_return = (
-            close.iloc[-1]
+            live_price
             /
-            close.iloc[-2]
+            daily_close.iloc[-1]
             - 1
         ) * 100
 
         one_week_return = (
-            close.iloc[-1]
+            live_price
             /
-            close.iloc[-6]
+            daily_close.iloc[-6]
             - 1
         ) * 100
 
         one_month_return = (
-            close.iloc[-1]
+            live_price
             /
-            close.iloc[-22]
+            daily_close.iloc[-22]
             - 1
         ) * 100
 
-        # -------------------------------------------------
+        # =================================================
+        # ADD LIVE PRICE AS TODAY'S LATEST PRICE
+        #
+        # This makes EMA reflect today's current price.
+        # =================================================
+
+        calculation_close = daily_close.copy()
+
+        calculation_close.iloc[-1] = live_price
+
+        # =================================================
         # EMA
-        # -------------------------------------------------
+        # =================================================
 
         ema21 = (
-            close
+            calculation_close
             .ewm(
                 span=21,
                 adjust=False
@@ -368,7 +393,7 @@ def calculate_stock_data(
         )
 
         ema50 = (
-            close
+            calculation_close
             .ewm(
                 span=50,
                 adjust=False
@@ -378,7 +403,7 @@ def calculate_stock_data(
         )
 
         ema200 = (
-            close
+            calculation_close
             .ewm(
                 span=200,
                 adjust=False
@@ -387,28 +412,36 @@ def calculate_stock_data(
             .iloc[-1]
         )
 
-        # -------------------------------------------------
+        # =================================================
         # 52 WEEK HIGH / LOW
-        # -------------------------------------------------
+        #
+        # Include current live price.
+        # =================================================
 
-        last_252 = close.tail(252)
+        last_252 = calculation_close.tail(252)
 
         week52_high = float(
-            last_252.max()
+            max(
+                last_252.max(),
+                live_price
+            )
         )
 
         week52_low = float(
-            last_252.min()
+            min(
+                last_252.min(),
+                live_price
+            )
         )
 
-        # -------------------------------------------------
+        # =================================================
         # DISTANCE FROM 52 WEEK HIGH
-        # -------------------------------------------------
+        # =================================================
 
         if week52_high != 0:
 
             from_52w_high = (
-                price
+                live_price
                 /
                 week52_high
                 - 1
@@ -418,14 +451,14 @@ def calculate_stock_data(
 
             from_52w_high = np.nan
 
-        # -------------------------------------------------
+        # =================================================
         # DISTANCE FROM 52 WEEK LOW
-        # -------------------------------------------------
+        # =================================================
 
         if week52_low != 0:
 
             from_52w_low = (
-                price
+                live_price
                 /
                 week52_low
                 - 1
@@ -435,14 +468,14 @@ def calculate_stock_data(
 
             from_52w_low = np.nan
 
-        # -------------------------------------------------
+        # =================================================
         # DISTANCE FROM 21 EMA
-        # -------------------------------------------------
+        # =================================================
 
         if ema21 != 0:
 
             from_21_ema = (
-                price
+                live_price
                 /
                 ema21
                 - 1
@@ -452,12 +485,12 @@ def calculate_stock_data(
 
             from_21_ema = np.nan
 
-        # -------------------------------------------------
+        # =================================================
         # TREND
-        # -------------------------------------------------
+        # =================================================
 
         if (
-            price > ema21
+            live_price > ema21
             and ema21 > ema50
             and ema50 > ema200
         ):
@@ -465,7 +498,7 @@ def calculate_stock_data(
             trend = "Bullish"
 
         elif (
-            price < ema21
+            live_price < ema21
             and ema21 < ema50
             and ema50 < ema200
         ):
@@ -476,15 +509,15 @@ def calculate_stock_data(
 
             trend = "Neutral"
 
-        # -------------------------------------------------
+        # =================================================
         # RESULT
-        # -------------------------------------------------
+        # =================================================
 
         return {
 
             "Stock": symbol,
 
-            "Price": price,
+            "Price": live_price,
 
             "1D Return %":
                 one_day_return,
@@ -570,7 +603,7 @@ if st.button(
 ):
 
     # =====================================================
-    # GET CURRENT NIFTY 100 LIST
+    # GET NIFTY 100
     # =====================================================
 
     try:
@@ -585,8 +618,7 @@ if st.button(
     except Exception as e:
 
         st.error(
-            "Unable to get the current "
-            "Nifty 100 list."
+            "Unable to get current Nifty 100 list."
         )
 
         st.error(str(e))
@@ -594,25 +626,31 @@ if st.button(
         st.stop()
 
     # =====================================================
-    # FRESH BULK DOWNLOAD
+    # DAILY DATA
     # =====================================================
 
     with st.spinner(
-        "Downloading fresh Nifty 100 data..."
+        "Downloading daily history..."
     ):
 
         try:
 
-            bulk_data = download_stock_data(
+            daily_data = get_daily_data(
                 symbols
             )
 
-        except Exception:
+        except Exception as e:
 
-            bulk_data = None
+            st.error(
+                "Unable to download daily data."
+            )
+
+            st.error(str(e))
+
+            st.stop()
 
     # =====================================================
-    # CALCULATE ALL STOCKS
+    # PROCESS STOCKS
     # =====================================================
 
     results = []
@@ -625,22 +663,31 @@ if st.button(
 
     for i, symbol in enumerate(symbols):
 
-        # First try bulk data
-        close = get_close_from_bulk(
+        # -------------------------------------------------
+        # Daily close
+        # -------------------------------------------------
+
+        daily_close = get_daily_close(
             symbol,
-            bulk_data
+            daily_data
         )
 
-        # If missing, try individual download
-        if close is None or len(close) < 22:
+        # -------------------------------------------------
+        # Live / latest intraday price
+        # -------------------------------------------------
 
-            close = download_single_stock(
-                symbol
-            )
+        live_price = get_intraday_price(
+            symbol
+        )
 
-        result = calculate_stock_data(
+        # -------------------------------------------------
+        # Calculate
+        # -------------------------------------------------
+
+        result = calculate_stock(
             symbol,
-            close
+            daily_close,
+            live_price
         )
 
         if result is not None:
@@ -660,7 +707,7 @@ if st.button(
     progress.empty()
 
     # =====================================================
-    # DATAFRAME
+    # CHECK RESULTS
     # =====================================================
 
     if not results:
@@ -714,7 +761,7 @@ if st.button(
     )
 
     # =====================================================
-    # LAST UPDATED TIME
+    # LAST UPDATE
     # =====================================================
 
     ist = ZoneInfo(
@@ -728,7 +775,19 @@ if st.button(
     )
 
     st.success(
-        f"🕐 Last updated: {updated_time}"
+        f"🕐 Latest data request: "
+        f"{updated_time}"
+    )
+
+    # =====================================================
+    # DATA NOTE
+    # =====================================================
+
+    st.caption(
+        "Price uses the latest available "
+        "Yahoo Finance 5-minute intraday data. "
+        "Technical calculations incorporate "
+        "the current price."
     )
 
     # =====================================================
@@ -746,7 +805,7 @@ if st.button(
     if missing_stocks:
 
         st.warning(
-            "Data could not be retrieved for: "
+            "Data unavailable for: "
             + ", ".join(missing_stocks)
         )
 
@@ -788,11 +847,14 @@ if st.button(
     # =====================================================
 
     styled_df = (
+
         display_df.style
+
         .map(
             colour_trend,
             subset=["Trend"]
         )
+
         .format({
 
             "Price": "{:.2f}",
@@ -815,7 +877,7 @@ if st.button(
     )
 
     # =====================================================
-    # DISPLAY TABLE
+    # DISPLAY
     # =====================================================
 
     st.dataframe(
@@ -836,6 +898,6 @@ if st.button(
     st.download_button(
         label="⬇️ Download Results CSV",
         data=csv_data,
-        file_name="nifty100_screener.csv",
+        file_name="nifty100_live_screener.csv",
         mime="text/csv"
 )
