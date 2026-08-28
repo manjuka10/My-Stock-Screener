@@ -1,10 +1,15 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import yfinance as yf
 import requests
 from io import StringIO
 from datetime import datetime
-import pytz
+from zoneinfo import ZoneInfo
+
+# ---------------------------------------------------------
+# PAGE SETTINGS
+# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="My Stock Screener",
@@ -13,18 +18,20 @@ st.set_page_config(
 )
 
 st.title("📊 My Stock Screener")
-st.caption("Automatic Nifty 100 Technical Screener")
+st.subheader("Nifty 100 Technical Screener")
 
+# ---------------------------------------------------------
+# GET CURRENT NIFTY 100 STOCK LIST
+# ---------------------------------------------------------
 
-@st.cache_data(ttl=21600)
+@st.cache_data(ttl=86400)
 def get_nifty100_stocks():
 
     url = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "text/csv,application/csv,text/plain,*/*",
-        "Referer": "https://www.niftyindices.com/"
+        "Accept": "text/csv,application/xhtml+xml,application/xml"
     }
 
     response = requests.get(
@@ -35,405 +42,311 @@ def get_nifty100_stocks():
 
     response.raise_for_status()
 
-    df = pd.read_csv(
-        StringIO(response.text)
-    )
+    df = pd.read_csv(StringIO(response.text))
 
-    symbol_column = None
+    # NSE CSV normally contains Symbol column
+    symbols = df["Symbol"].dropna().astype(str).str.strip().tolist()
 
-    for column in df.columns:
-        if "symbol" in column.lower():
-            symbol_column = column
-            break
-
-    if symbol_column is None:
-        raise Exception(
-            "Symbol column not found in Nifty 100 file."
-        )
-
-    symbols = (
-        df[symbol_column]
-        .dropna()
-        .astype(str)
-        .str.strip()
-        .tolist()
-    )
-
-    return [
-        symbol + ".NS"
-        for symbol in symbols
-    ]
+    return symbols
 
 
-def analyze_stock(symbol):
+# ---------------------------------------------------------
+# DOWNLOAD STOCK DATA
+# ---------------------------------------------------------
+
+@st.cache_data(ttl=900)
+def get_stock_data(symbol):
+
+    ticker = symbol + ".NS"
 
     try:
-
         data = yf.download(
-            symbol,
+            ticker,
             period="1y",
             interval="1d",
-            auto_adjust=True,
-            progress=False,
-            threads=False
+            auto_adjust=False,
+            progress=False
         )
 
         if data.empty:
             return None
 
+        # Handle yfinance MultiIndex
         if isinstance(data.columns, pd.MultiIndex):
-            data.columns = (
-                data.columns.get_level_values(0)
-            )
+            data.columns = data.columns.get_level_values(0)
 
-        data = data.dropna(
-            subset=["Close"]
-        )
+        data = data.dropna(subset=["Close"])
 
-        if len(data) < 200:
+        if len(data) < 30:
             return None
 
         close = data["Close"]
 
-        price = float(
-            close.iloc[-1]
-        )
+        # Current price
+        price = float(close.iloc[-1])
 
-        previous_close = float(
-            close.iloc[-2]
-        )
+        # -------------------------------------------------
+        # RETURNS
+        # -------------------------------------------------
 
-        one_day_return = (
-            price / previous_close - 1
+        # 1 Day
+        if len(close) >= 2:
+            return_1d = (price / float(close.iloc[-2]) - 1) * 100
+        else:
+            return_1d = np.nan
+
+        # 1 Week - approximately 5 trading days
+        if len(close) >= 6:
+            return_1w = (price / float(close.iloc[-6]) - 1) * 100
+        else:
+            return_1w = np.nan
+
+        # 1 Month - approximately 21 trading days
+        if len(close) >= 22:
+            return_1m = (price / float(close.iloc[-22]) - 1) * 100
+        else:
+            return_1m = np.nan
+
+        # -------------------------------------------------
+        # EMA
+        # -------------------------------------------------
+
+        ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
+        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
+
+        # -------------------------------------------------
+        # 52 WEEK LOW
+        # -------------------------------------------------
+
+        low_52w = float(close.min())
+
+        distance_52w_low = (
+            (price / low_52w) - 1
         ) * 100
 
-        one_week_return = (
-            price / float(close.iloc[-6]) - 1
-        ) * 100
-
-        one_month_return = (
-            price / float(close.iloc[-22]) - 1
-        ) * 100
-
-        ema21 = close.ewm(
-            span=21,
-            adjust=False
-        ).mean()
-
-        ema50 = close.ewm(
-            span=50,
-            adjust=False
-        ).mean()
-
-        ema200 = close.ewm(
-            span=200,
-            adjust=False
-        ).mean()
-
-        current_ema21 = float(
-            ema21.iloc[-1]
-        )
-
-        current_ema50 = float(
-            ema50.iloc[-1]
-        )
-
-        current_ema200 = float(
-            ema200.iloc[-1]
-        )
+        # -------------------------------------------------
+        # DISTANCE FROM 21 EMA
+        # -------------------------------------------------
 
         distance_21ema = (
-            price / current_ema21 - 1
+            (price / ema21) - 1
         ) * 100
 
-        high_52w = float(
-            close.max()
-        )
+        # -------------------------------------------------
+        # TREND
+        # -------------------------------------------------
 
-        low_52w = float(
-            close.min()
-        )
-
-        distance_high = (
-            price / high_52w - 1
-        ) * 100
-
-        distance_low = (
-            price / low_52w - 1
-        ) * 100
-
-        daily_returns = (
-            close.pct_change()
-            .dropna()
-        )
-
-        volatility = (
-            daily_returns.std()
-            * (252 ** 0.5)
-            * 100
-        )
-
-        if (
-            price > current_ema21
-            and current_ema21 > current_ema50
-            and current_ema50 > current_ema200
-        ):
+        if price > ema21 > ema50 > ema200:
             trend = "Bullish"
 
-        elif (
-            price < current_ema21
-            and current_ema21 < current_ema50
-            and current_ema50 < current_ema200
-        ):
+        elif price < ema21 < ema50 < ema200:
             trend = "Bearish"
 
         else:
             trend = "Neutral"
 
         return {
-
-            "Stock":
-                symbol.replace(".NS", ""),
-
-            "Price":
-                round(price, 2),
-
-            "1D Return %":
-                round(one_day_return, 2),
-
-            "1W Return %":
-                round(one_week_return, 2),
-
-            "1M Return %":
-                round(one_month_return, 2),
-
-            "21 EMA":
-                round(current_ema21, 2),
-
-            "50 EMA":
-                round(current_ema50, 2),
-
-            "200 EMA":
-                round(current_ema200, 2),
-
-            "From 21 EMA %":
-                round(distance_21ema, 2),
-
-            "Volatility %":
-                round(volatility, 2),
-
-            "52W High":
-                round(high_52w, 2),
-
-            "52W Low":
-                round(low_52w, 2),
-
-            "From 52W High %":
-                round(distance_high, 2),
-
-            "From 52W Low %":
-                round(distance_low, 2),
-
-            "Trend":
-                trend
+            "Stock": symbol,
+            "Price": price,
+            "1D Return %": return_1d,
+            "1W Return %": return_1w,
+            "1M Return %": return_1m,
+            "21 EMA": ema21,
+            "50 EMA": ema50,
+            "200 EMA": ema200,
+            "From 52W Low %": distance_52w_low,
+            "From 21 EMA %": distance_21ema,
+            "Trend": trend
         }
 
     except Exception:
         return None
 
 
-st.sidebar.header("🔍 Screener Filters")
+# ---------------------------------------------------------
+# TREND COLOUR FUNCTION
+# ---------------------------------------------------------
 
-min_1d = st.sidebar.number_input(
-    "Minimum 1D Return %",
-    value=-100.0,
-    step=1.0
-)
+def colour_trend(value):
 
-min_1w = st.sidebar.number_input(
-    "Minimum 1W Return %",
-    value=-100.0,
-    step=1.0
-)
+    if value == "Bullish":
+        return (
+            "background-color: #198754; "
+            "color: white; "
+            "font-weight: bold;"
+        )
 
-min_1m = st.sidebar.number_input(
-    "Minimum 1M Return %",
-    value=-100.0,
-    step=1.0
-)
+    elif value == "Bearish":
+        return (
+            "background-color: #dc3545; "
+            "color: white; "
+            "font-weight: bold;"
+        )
 
-min_distance_21 = st.sidebar.number_input(
-    "Minimum Distance From 21 EMA %",
-    value=-100.0,
-    step=1.0
-)
+    elif value == "Neutral":
+        return (
+            "background-color: #f0ad4e; "
+            "color: black; "
+            "font-weight: bold;"
+        )
 
-max_volatility = st.sidebar.number_input(
-    "Maximum Volatility %",
-    value=100.0,
-    step=5.0
-)
-
-min_distance_high = st.sidebar.number_input(
-    "Minimum Distance From 52W High %",
-    value=-100.0,
-    step=1.0
-)
-
-min_distance_low = st.sidebar.number_input(
-    "Minimum Distance From 52W Low %",
-    value=-100.0,
-    step=5.0
-)
-
-trend_filter = st.sidebar.selectbox(
-    "Trend",
-    [
-        "All",
-        "Bullish",
-        "Neutral",
-        "Bearish"
-    ]
-)
+    return ""
 
 
-if st.button(
-    "🔍 Scan Nifty 100",
-    type="primary"
-):
+# ---------------------------------------------------------
+# SCAN BUTTON
+# ---------------------------------------------------------
 
-    with st.spinner(
-        "Getting latest Nifty 100 constituents..."
-    ):
+if st.button("🔍 Scan Nifty 100", use_container_width=False):
+
+    with st.spinner("Getting current Nifty 100 stocks..."):
 
         try:
             stocks = get_nifty100_stocks()
 
         except Exception as e:
-
-            st.error(
-                "Unable to get the latest Nifty 100 list."
-            )
-
-            st.exception(e)
-
+            st.error("Unable to get the current Nifty 100 list.")
+            st.error(str(e))
             st.stop()
-
-    st.info(
-        f"Latest Nifty 100 universe: {len(stocks)} stocks"
-    )
 
     results = []
 
     progress = st.progress(0)
 
-    status = st.empty()
+    total = len(stocks)
 
-    for i, stock in enumerate(stocks):
+    for i, symbol in enumerate(stocks):
 
-        status.text(
-            f"Scanning "
-            f"{stock.replace('.NS', '')} "
-            f"({i + 1}/{len(stocks)})..."
-        )
-
-        result = analyze_stock(stock)
+        result = get_stock_data(symbol)
 
         if result is not None:
             results.append(result)
 
-        progress.progress(
-            (i + 1) / len(stocks)
-        )
+        progress.progress((i + 1) / total)
 
     progress.empty()
-    status.empty()
+
+    if not results:
+        st.error("No stock data could be downloaded.")
+        st.stop()
 
     df = pd.DataFrame(results)
 
-    if not df.empty:
+    # -----------------------------------------------------
+    # SORT BY 1 WEEK RETURN
+    # -----------------------------------------------------
 
-        df = df[
-            (df["1D Return %"] >= min_1d)
-            &
-            (df["1W Return %"] >= min_1w)
-            &
-            (df["1M Return %"] >= min_1m)
-            &
-            (df["From 21 EMA %"] >= min_distance_21)
-            &
-            (df["Volatility %"] <= max_volatility)
-            &
-            (df["From 52W High %"] >= min_distance_high)
-            &
-            (df["From 52W Low %"] >= min_distance_low)
-        ]
+    df = df.sort_values(
+        by="1W Return %",
+        ascending=False
+    ).reset_index(drop=True)
 
-        if trend_filter != "All":
+    # -----------------------------------------------------
+    # ROUND NUMBERS
+    # -----------------------------------------------------
 
-            df = df[
-                df["Trend"] == trend_filter
-            ]
+    numeric_columns = [
+        "Price",
+        "1D Return %",
+        "1W Return %",
+        "1M Return %",
+        "21 EMA",
+        "50 EMA",
+        "200 EMA",
+        "From 52W Low %",
+        "From 21 EMA %"
+    ]
 
-        df = df.sort_values(
-            "1W Return %",
-            ascending=False
-        ).reset_index(drop=True)
+    for col in numeric_columns:
+        df[col] = df[col].round(2)
 
-        india_timezone = pytz.timezone(
-            "Asia/Kolkata"
+    # -----------------------------------------------------
+    # LAST UPDATE TIME - INDIA
+    # -----------------------------------------------------
+
+    update_time = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    ).strftime("%d-%m-%Y %I:%M:%S %p")
+
+    st.success(
+        f"Last updated: {update_time} IST"
+    )
+
+    st.write(
+        f"📋 **Results — {len(df)} stocks**"
+    )
+
+    # -----------------------------------------------------
+    # COLOUR TREND COLUMN
+    # -----------------------------------------------------
+
+    styled_df = (
+        df.style
+        .map(
+            colour_trend,
+            subset=["Trend"]
+        )
+        .format({
+            "Price": "{:.2f}",
+            "1D Return %": "{:.2f}",
+            "1W Return %": "{:.2f}",
+            "1M Return %": "{:.2f}",
+            "21 EMA": "{:.2f}",
+            "50 EMA": "{:.2f}",
+            "200 EMA": "{:.2f}",
+            "From 52W Low %": "{:.2f}",
+            "From 21 EMA %": "{:.2f}"
+        })
+    )
+
+    # -----------------------------------------------------
+    # DISPLAY TABLE
+    # -----------------------------------------------------
+
+    st.dataframe(
+        styled_df,
+        use_container_width=True,
+        height=650,
+        hide_index=True
+    )
+
+    # -----------------------------------------------------
+    # SUMMARY
+    # -----------------------------------------------------
+
+    bullish_count = (df["Trend"] == "Bullish").sum()
+    neutral_count = (df["Trend"] == "Neutral").sum()
+    bearish_count = (df["Trend"] == "Bearish").sum()
+
+    st.markdown("---")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "🟢 Bullish",
+            bullish_count
         )
 
-        last_update = datetime.now(
-            india_timezone
-        ).strftime(
-            "%d-%b-%Y %I:%M:%S %p IST"
+    with col2:
+        st.metric(
+            "🟠 Neutral",
+            neutral_count
         )
 
-        st.success(
-            f"🕒 Last Updated: {last_update}"
-        )
-
-        st.subheader(
-            f"📋 Results — {len(df)} stocks"
-        )
-
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            height=650
-        )
-
-        csv = df.to_csv(
-            index=False
-        )
-
-        st.download_button(
-            label="⬇️ Download Results",
-            data=csv,
-            file_name="nifty100_screener.csv",
-            mime="text/csv"
-        )
-
-    else:
-
-        st.warning(
-            "No stocks matched your filters."
+    with col3:
+        st.metric(
+            "🔴 Bearish",
+            bearish_count
         )
 
 else:
 
     st.info(
-        "Set your filters and tap "
-        "'Scan Nifty 100'."
+        "Click **🔍 Scan Nifty 100** to scan the current Nifty 100 stocks."
     )
 
-
-st.divider()
-
-st.caption(
-    "Nifty 100 constituents are fetched automatically "
-    "from NSE Indices. Market data is provided by "
-    "Yahoo Finance."
+    st.caption(
+        "The Nifty 100 constituent list is fetched automatically."
 )
