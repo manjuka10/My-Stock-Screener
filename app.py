@@ -289,14 +289,29 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # ----------------------------------------------------
         # 1D RETURN
         # Live session: live price vs previous completed close.
-        # Closed session: last completed close vs itself = 0.
+        # Closed session: latest completed close vs the prior
+        # completed trading-day close. This preserves the latest
+        # actual 1D return on weekends/holidays instead of showing
+        # 0.00% for every stock.
         # ----------------------------------------------------
-        if previous_close > 0:
-            one_day_return = (
-                current_price / previous_close - 1.0
-            ) * 100.0
+        if live_session:
+            if previous_close > 0:
+                one_day_return = (
+                    current_price / previous_close - 1.0
+                ) * 100.0
+            else:
+                one_day_return = np.nan
         else:
-            one_day_return = np.nan
+            if len(historical) >= 2:
+                prior_close = float(historical["Close"].iloc[-2])
+                if prior_close > 0:
+                    one_day_return = (
+                        previous_close / prior_close - 1.0
+                    ) * 100.0
+                else:
+                    one_day_return = np.nan
+            else:
+                one_day_return = np.nan
 
         # ----------------------------------------------------
         # 1W RETURN
