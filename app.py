@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -20,7 +21,7 @@ st.set_page_config(
 
 st.title("📊 My Stock Screener")
 st.subheader("Nifty 100 Technical Screener")
-st.caption("Current price = latest available intraday price. 52W High/Low use actual traded High/Low, not closing prices.")
+st.caption("Live mode: price, returns, 21/50/200 EMA, EMA distance and 52W High/Low update with the latest intraday data. EMA uses completed daily closes plus the current live price.")
 
 NIFTY100_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty100list.csv"
 IST = ZoneInfo("Asia/Kolkata")
@@ -86,7 +87,7 @@ def get_daily(symbols):
     )
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=30)
 def get_intraday(symbols):
     tickers = [s + ".NS" for s in symbols]
 
@@ -275,15 +276,20 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     # Current price vs previous month's corresponding date close
     # --------------------------------------------------------
 
-    # 1-month return uses completed daily closes only.
-    # Example: on 29-Aug, use 28-Aug close / 28-Jul close.
+    # 1-month return:
+    # During market hours, use today's calendar trading date.
+    # On a holiday/weekend, use the most recent completed trading date.
+    # Example: live Aug-28 price -> Jul-28 close.
     completed_dates = index_to_dates(historical.index)
 
     if len(historical) >= 1:
-        latest_completed_date = completed_dates.iloc[-1]
+        if not intraday.empty:
+            reference_date = today
+        else:
+            reference_date = completed_dates.iloc[-1]
 
         target_date = (
-            pd.Timestamp(latest_completed_date)
+            pd.Timestamp(reference_date)
             - pd.DateOffset(months=1)
         ).date()
 
@@ -496,14 +502,33 @@ def colour_trend(value):
 
 
 # ============================================================
+# AUTO REFRESH
+# ============================================================
+
+AUTO_REFRESH_SECONDS = 60
+
+refresh_count = 0
+if st.checkbox("🔄 Auto refresh every 60 seconds", value=True):
+    refresh_count = st_autorefresh(
+        interval=AUTO_REFRESH_SECONDS * 1000,
+        key="options_screener_refresh"
+    )
+
+# ============================================================
 # SCAN
 # ============================================================
 
-if st.button("🔍 Scan Nifty 100", type="primary"):
+manual_scan = st.button("🔍 Scan Nifty 100", type="primary")
+auto_scan = (
+    refresh_count > 0
+    and st.session_state.get("options_scan_df") is not None
+    and refresh_count != st.session_state.get("options_last_refresh_count", -1)
+)
+
+if manual_scan or auto_scan:
 
     now_ist = datetime.now(IST)
     today = now_ist.date()
-
     # --------------------------------------------------------
     # SYMBOLS
     # --------------------------------------------------------
@@ -690,6 +715,11 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
         height=650,
         hide_index=True
     )
+    st.session_state["options_scan_df"] = df.copy()
+    st.session_state["options_symbols"] = symbols
+    st.session_state["options_failed"] = failed
+    st.session_state["options_last_updated"] = updated_time
+    st.session_state["options_last_refresh_count"] = refresh_count
 
     # --------------------------------------------------------
     # DOWNLOAD
@@ -702,4 +732,4 @@ if st.button("🔍 Scan Nifty 100", type="primary"):
         data=csv_data,
         file_name="nifty100_options_screener.csv",
         mime="text/csv"
-)
+    )
