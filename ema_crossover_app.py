@@ -128,29 +128,184 @@ if st.button('🔍 Scan Nifty 100',type='primary'):
     st.session_state['ema_scan_time'] = now
     cols=['Stock','Price (Live)','21 EMA','50 EMA','EMA Separation %','Price vs 21 EMA %','Price vs 50 EMA %','Trend','Signal','Crossover Date','Days Since Crossover','21 EMA Slope']
     df=df[cols]
-    st.markdown('### Trend Filter')
-    df=st.session_state.get('ema_scan_df', pd.DataFrame()).copy()
-    if df.empty:
-        st.info('Click 🔍 Scan Nifty 100 to load the latest results.')
-        st.stop()
+st.markdown("### Trend Filter")
 
-    cols=['Stock','Price (Live)','21 EMA','50 EMA','EMA Separation %','Price vs 21 EMA %','Price vs 50 EMA %','Trend','Signal','Crossover Date','Days Since Crossover','21 EMA Slope']
-    df=df[cols]
+df = st.session_state.get(
+    "ema_scan_df",
+    pd.DataFrame()
+).copy()
 
-    choice=st.radio('Show',['All','Confirmed Bullish','Waiting Confirmation','Confirmed Bearish','Fresh Crossover'],horizontal=True,label_visibility='collapsed')
-    show=df if choice=='All' else df[df.Signal==choice].copy()
-    show=show.assign(_d=pd.to_numeric(show['Days Since Crossover'],errors='coerce')).sort_values('_d',na_position='last').drop(columns='_d').reset_index(drop=True)
-    for c in ['Price (Live)','21 EMA','50 EMA','EMA Separation %','Price vs 21 EMA %','Price vs 50 EMA %']: show[c]=pd.to_numeric(show[c],errors='coerce').round(2)
-    a,b,c,d,e=st.columns(5)
-    a.metric('Confirmed Bullish',int((df.Signal=='Confirmed Bullish').sum())); b.metric('Waiting Confirmation',int((df.Signal=='Waiting Confirmation').sum())); c.metric('Confirmed Bearish',int((df.Signal=='Confirmed Bearish').sum())); d.metric('Fresh Crossover',int((df.Signal=='Fresh Crossover').sum())); e.metric('Total Stocks',len(df))
-    with st.expander('ℹ️ Confirmation rules',expanded=False):
-        st.markdown('**Bullish:** 21 EMA > 50 EMA, 21 EMA rising, live price above both EMAs, last 2 completed daily closes above 21 EMA, and EMA separation ≥ 1%.\n\n**Bearish:** exact opposite.\n\nA fresh crossover alone is **not** treated as a confirmed entry.')
-    updated_time=st.session_state.get('ema_scan_time')
-    if updated_time is None:
-        updated_time=datetime.now(ZoneInfo('Asia/Kolkata'))
-    st.success('🕐 Last updated: '+updated_time.strftime('%d-%m-%Y %I:%M:%S %p IST'))
-    st.subheader(f'📋 EMA Crossover Results — {len(show)} stocks')
-    styled=show.style.map(sig_color,subset=['Signal']).map(trend_color,subset=['Trend']).format({'Price (Live)':'{:.2f}','21 EMA':'{:.2f}','50 EMA':'{:.2f}','EMA Separation %':'{:.2f}','Price vs 21 EMA %':'{:.2f}','Price vs 50 EMA %':'{:.2f}','Days Since Crossover':'{:.0f}'},na_rep='-')
-    st.dataframe(styled,use_container_width=True,height=650,hide_index=True)
-    st.download_button('⬇️ Download Results CSV',show.to_csv(index=False).encode('utf-8'),'nifty100_21_50_ema_confirmation.csv','text/csv')
-    st.caption('EMA and crossover use completed daily candles. Price uses the latest available intraday market price. The confirmation filter is designed to reduce false crossover entries.')
+if df.empty:
+    st.info("Click 🔍 Scan Nifty 100 to load the latest results.")
+    st.stop()
+
+cols = [
+    "Stock",
+    "Price (Live)",
+    "21 EMA",
+    "50 EMA",
+    "EMA Separation %",
+    "Price vs 21 EMA %",
+    "Price vs 50 EMA %",
+    "Trend",
+    "Signal",
+    "Crossover Date",
+    "Days Since Crossover",
+    "21 EMA Slope"
+]
+
+df = df[cols]
+
+choice = st.radio(
+    "Show",
+    [
+        "All",
+        "Confirmed Bullish",
+        "Waiting Confirmation",
+        "Confirmed Bearish",
+        "Fresh Crossover"
+    ],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+if choice == "All":
+    show = df.copy()
+else:
+    show = df[
+        df["Signal"] == choice
+    ].copy()
+
+show = (
+    show
+    .assign(
+        _d=pd.to_numeric(
+            show["Days Since Crossover"],
+            errors="coerce"
+        )
+    )
+    .sort_values(
+        "_d",
+        na_position="last"
+    )
+    .drop(columns="_d")
+    .reset_index(drop=True)
+)
+
+for c in [
+    "Price (Live)",
+    "21 EMA",
+    "50 EMA",
+    "EMA Separation %",
+    "Price vs 21 EMA %",
+    "Price vs 50 EMA %"
+]:
+    show[c] = pd.to_numeric(
+        show[c],
+        errors="coerce"
+    ).round(2)
+
+a,b,c,d,e = st.columns(5)
+
+a.metric(
+    "Confirmed Bullish",
+    int((df["Signal"] == "Confirmed Bullish").sum())
+)
+
+b.metric(
+    "Waiting Confirmation",
+    int((df["Signal"] == "Waiting Confirmation").sum())
+)
+
+c.metric(
+    "Confirmed Bearish",
+    int((df["Signal"] == "Confirmed Bearish").sum())
+)
+
+d.metric(
+    "Fresh Crossover",
+    int((df["Signal"] == "Fresh Crossover").sum())
+)
+
+e.metric(
+    "Total Stocks",
+    len(df)
+)
+
+with st.expander(
+    "ℹ️ Confirmation rules",
+    expanded=False
+):
+    st.markdown(
+        "**Bullish:** 21 EMA > 50 EMA, 21 EMA rising, "
+        "live price above both EMAs, last 2 completed daily "
+        "closes above 21 EMA, and EMA separation ≥ 1%.\n\n"
+        "**Bearish:** exact opposite.\n\n"
+        "A fresh crossover alone is **not** treated as a "
+        "confirmed entry."
+    )
+
+updated_time = st.session_state.get(
+    "ema_scan_time"
+)
+
+if updated_time is None:
+    updated_time = datetime.now(
+        ZoneInfo("Asia/Kolkata")
+    )
+
+st.success(
+    "🕐 Last updated: "
+    + updated_time.strftime(
+        "%d-%m-%Y %I:%M:%S %p IST"
+    )
+)
+
+st.subheader(
+    f"📋 EMA Crossover Results — {len(show)} stocks"
+)
+
+styled = (
+    show.style
+    .map(
+        sig_color,
+        subset=["Signal"]
+    )
+    .map(
+        trend_color,
+        subset=["Trend"]
+    )
+    .format(
+        {
+            "Price (Live)": "{:.2f}",
+            "21 EMA": "{:.2f}",
+            "50 EMA": "{:.2f}",
+            "EMA Separation %": "{:.2f}",
+            "Price vs 21 EMA %": "{:.2f}",
+            "Price vs 50 EMA %": "{:.2f}",
+            "Days Since Crossover": "{:.0f}"
+        },
+        na_rep="-"
+    )
+)
+
+st.dataframe(
+    styled,
+    use_container_width=True,
+    height=650,
+    hide_index=True
+)
+
+st.download_button(
+    "⬇️ Download Results CSV",
+    show.to_csv(index=False).encode("utf-8"),
+    "nifty100_21_50_ema_confirmation.csv",
+    "text/csv"
+)
+
+st.caption(
+    "EMA and crossover use completed daily candles. "
+    "Price uses the latest available intraday market price. "
+    "The confirmation filter is designed to reduce false "
+    "crossover entries."
+)
