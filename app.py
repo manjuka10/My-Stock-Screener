@@ -212,20 +212,35 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     intraday = get_ticker_data(intraday_all, ticker)
 
     # --------------------------------------------------------
-    # CURRENT PRICE
+    # CURRENT PRICE / LIVE SESSION CHECK
     # --------------------------------------------------------
+    # Yahoo can sometimes return the previous trading session in the
+    # intraday request on weekends/holidays.  Never treat that as a
+    # live price for today.
 
+    is_live_today = False
     current_price = np.nan
 
     if not intraday.empty and "Close" in intraday.columns:
         p = intraday["Close"].dropna()
 
         if not p.empty:
-            current_price = float(p.iloc[-1])
+            latest_intraday_ts = pd.Timestamp(p.index[-1])
+            if latest_intraday_ts.tzinfo is not None:
+                latest_intraday_ts = latest_intraday_ts.tz_convert(IST)
 
-    # Fallback to latest daily close
+            # Intraday data is considered live only when its latest bar
+            # belongs to today's IST calendar date.
+            is_live_today = latest_intraday_ts.date() == today
+
+            if is_live_today:
+                current_price = float(p.iloc[-1])
+
+    # On a weekend/holiday (or if today's intraday feed is unavailable),
+    # use the latest completed daily close.
     if not np.isfinite(current_price) or current_price <= 0:
         current_price = float(daily["Close"].iloc[-1])
+        is_live_today = False
 
     # --------------------------------------------------------
     # COMPLETED DAILY SESSIONS
@@ -277,13 +292,15 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     # --------------------------------------------------------
 
     # 1-month return:
-    # During market hours, use today's calendar trading date.
-    # On a holiday/weekend, use the most recent completed trading date.
-    # Example: live Aug-28 price -> Jul-28 close.
+    # During market hours, the live price is compared with the same
+    # calendar date one month earlier.
+    # Outside market hours, use the most recent completed trading date.
+    # Example: live Aug-28 price -> Jul-28 close; on Aug-29 holiday,
+    # still use Aug-28 -> Jul-28.
     completed_dates = index_to_dates(historical.index)
 
     if len(historical) >= 1:
-        if not intraday.empty:
+        if is_live_today:
             reference_date = today
         else:
             reference_date = completed_dates.iloc[-1]
@@ -323,14 +340,17 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
 
     # --------------------------------------------------------
     # EMA
-    # Use completed daily closes + current live price
+    # During a live trading session: completed daily closes + today's
+    # live price as the current daily observation.
+    # Outside a live session: completed daily closes only.
+    # This prevents the latest close being counted twice on holidays.
     # --------------------------------------------------------
 
     ema_series = historical["Close"].copy()
 
-    live_index = pd.Timestamp(now_ist)
-
-    ema_series.loc[live_index] = current_price
+    if is_live_today:
+        live_index = pd.Timestamp(now_ist)
+        ema_series.loc[live_index] = current_price
 
     ema21 = float(
         ema_series.ewm(span=21, adjust=False).mean().iloc[-1]
@@ -389,7 +409,7 @@ def calculate_stock(symbol, daily_all, intraday_all, today, now_ist):
     today_high = np.nan
     today_low = np.nan
 
-    if not intraday.empty:
+    if is_live_today and not intraday.empty:
         if "High" in intraday.columns:
             h = pd.to_numeric(
                 intraday["High"],
@@ -678,6 +698,11 @@ if manual_scan or auto_scan:
         f"🕐 Last updated: {updated_time}"
     )
 
+    st.caption(
+        "LIVE session: intraday price/returns/EMA/52W values. "
+        "Market closed: last completed trading-day values are used."
+    )
+
     st.write(
         f"**Stocks calculated: {len(df)} / {len(symbols)}**"
     )
@@ -702,34 +727,3 @@ if manual_scan or auto_scan:
         display_format[col] = "{:.2f}"
 
     styled_df = display_df.style.format(
-        display_format,
-        na_rep="—"
-    ).map(
-        colour_trend,
-        subset=["Trend"]
-    )
-
-    st.dataframe(
-        styled_df,
-        use_container_width=True,
-        height=650,
-        hide_index=True
-    )
-    st.session_state["options_scan_df"] = df.copy()
-    st.session_state["options_symbols"] = symbols
-    st.session_state["options_failed"] = failed
-    st.session_state["options_last_updated"] = updated_time
-    st.session_state["options_last_refresh_count"] = refresh_count
-
-    # --------------------------------------------------------
-    # DOWNLOAD
-    # --------------------------------------------------------
-
-    csv_data = df.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "⬇️ Download Results CSV",
-        data=csv_data,
-        file_name="nifty100_options_screener.csv",
-        mime="text/csv"
-)
