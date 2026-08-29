@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -732,4 +731,4 @@ if manual_scan or auto_scan:
         data=csv_data,
         file_name="nifty100_options_screener.csv",
         mime="text/csv"
-    )
+)
