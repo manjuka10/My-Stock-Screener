@@ -483,4 +483,4 @@ if st.button("🔍 Scan Nifty 100"):
         data=csv_data,
         file_name="nifty100_screener.csv",
         mime="text/csv"
-    )
+          )
