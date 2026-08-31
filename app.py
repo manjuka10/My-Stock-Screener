@@ -116,7 +116,7 @@ def get_intraday(symbols):
 
     return yf.download(
         tickers=tickers,
-        period="1d",
+        period="5d",
         interval="5m",
         auto_adjust=False,
         progress=False,
@@ -124,7 +124,6 @@ def get_intraday(symbols):
         threads=True
     )
 
-# The function must exist before its cache can be cleared.
 if refresh_clicked:
     get_intraday.clear()
     st.rerun()
@@ -244,13 +243,11 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # ----------------------------------------------------
         valid_today_intraday = False
         today_intraday = pd.DataFrame()
-
         if not intraday.empty:
             intraday_dates = index_to_dates(intraday.index)
             today_intraday = intraday.loc[
                 intraday_dates == today
             ].copy()
-
             if not today_intraday.empty and "Close" in today_intraday.columns:
                 valid_today_intraday = bool(
                     today_intraday["Close"].dropna().shape[0] > 0
@@ -712,6 +709,19 @@ def live_scan():
     st.success(
         f"🕐 Last updated: {updated_time}"
     )
+
+    if is_nse_session_now(now_ist):
+        live_count = int(df["Price"].notna().sum())
+        st.info(
+            f"🟢 Live-session mode: {live_count}/{len(symbols)} stocks have "
+            f"current-day intraday data. Price, returns, EMA and 52W values "
+            f"are recalculated from the latest valid intraday price."
+        )
+    else:
+        st.info(
+            "🔵 Market closed: showing the latest completed NSE trading-session "
+            "close. During market hours, current-day intraday prices are used."
+        )
 
     st.info(
         f"Nifty 100: {len(symbols)} stocks | "
