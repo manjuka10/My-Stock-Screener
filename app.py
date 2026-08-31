@@ -110,9 +110,10 @@ def get_daily(symbols):
         threads=True
     )
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def get_intraday(symbols):
     tickers = [s + ".NS" for s in symbols]
+
     return yf.download(
         tickers=tickers,
         period="5d",
@@ -124,7 +125,7 @@ def get_intraday(symbols):
         prepost=False
     )
 
-# The function must exist before its cache can be cleared.
+
 # ============================================================
 # EXTRACT ONE TICKER
 # ============================================================
@@ -222,7 +223,6 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
 
     try:
         daily = get_ticker_data(daily_all, ticker)
-
         if daily.empty or "Close" not in daily.columns:
             return None, "no daily data"
 
@@ -233,305 +233,167 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         today = now_ist.date()
         intraday = get_ticker_data(intraday_all, ticker)
 
-        # ----------------------------------------------------
-        # Determine whether intraday data is genuinely today's
-        # data. Yahoo may return the last session on holidays/
-        # weekends, so date validation is essential.
-        # ----------------------------------------------------
-        valid_today_intraday = False
+        # Identify current-day intraday data and the newest session returned.
         today_intraday = pd.DataFrame()
         latest_intraday = pd.DataFrame()
         latest_intraday_date = None
 
-        if not intraday.empty:
+        if not intraday.empty and "Close" in intraday.columns:
             intraday_dates = index_to_dates(intraday.index)
+
             today_intraday = intraday.loc[
                 intraday_dates == today
-            ].copy()
-
-            if not today_intraday.empty and "Close" in today_intraday.columns:
-                valid_today_intraday = bool(
-                    today_intraday["Close"].dropna().shape[0] > 0
-                )
+            ].copy().dropna(subset=["Close"])
 
             valid_dates = intraday_dates.dropna()
             if not valid_dates.empty:
                 latest_intraday_date = valid_dates.max()
                 latest_intraday = intraday.loc[
                     intraday_dates == latest_intraday_date
-                ].copy()
+                ].copy().dropna(subset=["Close"])
 
+        valid_today_intraday = not today_intraday.empty
+
+        # During NSE hours, current-day intraday data is mandatory.
         live_session = (
             is_nse_session_now(now_ist)
             and valid_today_intraday
         )
 
-        # ----------------------------------------------------
-        # Completed daily history
-        # ----------------------------------------------------
+        # Completed daily history: exclude today's incomplete daily candle.
         daily_dates = index_to_dates(daily.index)
         historical = daily.loc[daily_dates < today].copy()
         historical = historical.dropna(subset=["Close"])
 
-        # On a normal trading day, today's daily candle may be
-        # incomplete. On a holiday, the latest daily row is the
-        # previous completed session and must be retained.
         if historical.empty:
-            historical = daily.copy()
-
-        historical = historical.dropna(subset=["Close"])
-
+            historical = daily.copy().dropna(subset=["Close"])
         if historical.empty:
             return None, "no completed daily history"
 
         previous_close = float(historical["Close"].iloc[-1])
 
-        # ----------------------------------------------------
-        # CURRENT PRICE
-        # ----------------------------------------------------
+        # Current price:
+        # - market open + today's intraday => latest today's bar
+        # - market closed => latest session returned by intraday feed
+        # - market open without today's intraday => unavailable, never stale
         if live_session:
             prices = today_intraday["Close"].dropna()
-
-            if not prices.empty:
-                current_price = float(prices.iloc[-1])
-            else:
-                current_price = previous_close
-                live_session = False
+            current_price = float(prices.iloc[-1])
+            price_date = today
+        elif not is_nse_session_now(now_ist) and not latest_intraday.empty:
+            prices = latest_intraday["Close"].dropna()
+            current_price = float(prices.iloc[-1])
+            price_date = latest_intraday_date
+        elif is_nse_session_now(now_ist):
+            return None, "today intraday price unavailable"
         else:
-            # Market closed / holiday / stale intraday data:
-            # use the latest completed daily close.
             current_price = previous_close
+            price_date = get_index_date(historical.index[-1])
 
         if not np.isfinite(current_price) or current_price <= 0:
             return None, "invalid current price"
 
-        # ----------------------------------------------------
-        # 1D RETURN
-        # Live session: live price vs previous completed close.
-        # Closed session: latest completed close vs the prior
-        # completed trading-day close. This preserves the latest
-        # actual 1D return on weekends/holidays instead of showing
-        # 0.00% for every stock.
-        # ----------------------------------------------------
-        if live_session:
-            if previous_close > 0:
-                one_day_return = (
-                    current_price / previous_close - 1.0
-                ) * 100.0
-            else:
-                one_day_return = np.nan
-        else:
-            if len(historical) >= 2:
-                prior_close = float(historical["Close"].iloc[-2])
-                if prior_close > 0:
-                    one_day_return = (
-                        previous_close / prior_close - 1.0
-                    ) * 100.0
-                else:
-                    one_day_return = np.nan
-            else:
-                one_day_return = np.nan
+        # 1D return: current price vs previous completed close.
+        one_day_return = (
+            (current_price / previous_close) - 1.0
+        ) * 100.0 if previous_close > 0 else np.nan
 
-        # ----------------------------------------------------
-        # 1W RETURN
-        # Same-date previous week, falling back to the previous
-        # trading day on/before the target date.
-        # ----------------------------------------------------
-        reference_date = today if live_session else get_index_date(historical.index[-1])
-
-        if reference_date is not None:
-            week_target = (
-                pd.Timestamp(reference_date)
-                - pd.Timedelta(days=7)
-            ).date()
-            week_base = latest_close_on_or_before(
-                historical,
-                week_target
-            )
-        else:
-            week_base = np.nan
-
-        if np.isfinite(week_base) and week_base > 0:
+        # 1W return: current price vs five completed trading sessions ago.
+        if len(historical) >= 5:
+            week_base = float(historical["Close"].iloc[-5])
             one_week_return = (
-                current_price / week_base - 1.0
-            ) * 100.0
+                (current_price / week_base) - 1.0
+            ) * 100.0 if week_base > 0 else np.nan
         else:
             one_week_return = np.nan
 
-        # ----------------------------------------------------
-        # 1M RETURN
-        # Same calendar date previous month, falling back to
-        # previous trading day on/before that target date.
-        # ----------------------------------------------------
-        if reference_date is not None:
-            month_target = (
-                pd.Timestamp(reference_date)
-                - pd.DateOffset(months=1)
-            ).date()
-            month_base = latest_close_on_or_before(
-                historical,
-                month_target
-            )
-        else:
-            month_base = np.nan
+        # 1M return: current price vs same/previous trading date one month ago.
+        month_base = previous_month_same_or_previous_trading_close(
+            historical, price_date
+        )
+        one_month_return = (
+            (current_price / month_base) - 1.0
+        ) * 100.0 if np.isfinite(month_base) and month_base > 0 else np.nan
 
-        if np.isfinite(month_base) and month_base > 0:
-            one_month_return = (
-                current_price / month_base - 1.0
-            ) * 100.0
-        else:
-            one_month_return = np.nan
-
-        # ----------------------------------------------------
-        # EMA
-        # During a live session: completed daily closes + live
-        # current price as today's observation.
-        # When closed: completed daily closes only.
-        # ----------------------------------------------------
-        calc_close = historical["Close"].copy()
-
-        if live_session:
-            calc_close = pd.concat([
-                calc_close,
-                pd.Series(
-                    [current_price],
-                    index=[pd.Timestamp(now_ist)]
-                )
-            ])
-
-        # Need enough data for a meaningful 200 EMA.
-        if len(calc_close) < 200:
-            return None, "insufficient historical data for 200 EMA"
+        # EMA: completed daily closes + current price.
+        ema_series = historical["Close"].copy()
+        ema_series.loc[pd.Timestamp(now_ist)] = current_price
 
         ema21 = float(
-            calc_close.ewm(
-                span=21,
-                adjust=False
-            ).mean().iloc[-1]
+            ema_series.ewm(span=21, adjust=False).mean().iloc[-1]
         )
-
         ema50 = float(
-            calc_close.ewm(
-                span=50,
-                adjust=False
-            ).mean().iloc[-1]
+            ema_series.ewm(span=50, adjust=False).mean().iloc[-1]
         )
-
         ema200 = float(
-            calc_close.ewm(
-                span=200,
-                adjust=False
-            ).mean().iloc[-1]
+            ema_series.ewm(span=200, adjust=False).mean().iloc[-1]
         )
 
-        # ----------------------------------------------------
-        # 52 WEEK HIGH / LOW
-        # Actual High / Low, not closing prices.
-        # Today's intraday High/Low is included only when it is
-        # actually today's trading data.
-        # ----------------------------------------------------
-        cutoff = (
-            pd.Timestamp(reference_date)
-            - pd.Timedelta(days=365)
+        # 52W High/Low: daily High/Low + today's intraday High/Low when available.
+        cutoff_date = (
+            pd.Timestamp(price_date) - pd.Timedelta(days=365)
         ).date()
-
         hist_dates = index_to_dates(historical.index)
-        last_52w = historical.loc[
-            hist_dates >= cutoff
-        ].copy()
-
+        last_52w = historical.loc[hist_dates >= cutoff_date].copy()
         if last_52w.empty:
             last_52w = historical.copy()
 
-        historical_high = np.nan
-        historical_low = np.nan
+        week52_high = np.nan
+        week52_low = np.nan
 
         if "High" in last_52w.columns:
             highs = pd.to_numeric(
-                last_52w["High"],
-                errors="coerce"
+                last_52w["High"], errors="coerce"
             ).dropna()
             if not highs.empty:
-                historical_high = float(highs.max())
+                week52_high = float(highs.max())
 
         if "Low" in last_52w.columns:
             lows = pd.to_numeric(
-                last_52w["Low"],
-                errors="coerce"
+                last_52w["Low"], errors="coerce"
             ).dropna()
             if not lows.empty:
-                historical_low = float(lows.min())
+                week52_low = float(lows.min())
 
-        week52_high = historical_high
-        week52_low = historical_low
-
-        if live_session and not today_intraday.empty:
-
+        if valid_today_intraday:
             if "High" in today_intraday.columns:
                 highs = pd.to_numeric(
-                    today_intraday["High"],
-                    errors="coerce"
+                    today_intraday["High"], errors="coerce"
                 ).dropna()
                 if not highs.empty:
                     today_high = float(highs.max())
-                    if np.isfinite(week52_high):
-                        week52_high = max(
-                            week52_high,
-                            today_high
-                        )
-                    else:
-                        week52_high = today_high
+                    week52_high = (
+                        today_high if not np.isfinite(week52_high)
+                        else max(week52_high, today_high)
+                    )
 
             if "Low" in today_intraday.columns:
                 lows = pd.to_numeric(
-                    today_intraday["Low"],
-                    errors="coerce"
+                    today_intraday["Low"], errors="coerce"
                 ).dropna()
                 if not lows.empty:
                     today_low = float(lows.min())
-                    if np.isfinite(week52_low):
-                        week52_low = min(
-                            week52_low,
-                            today_low
-                        )
-                    else:
-                        week52_low = today_low
+                    week52_low = (
+                        today_low if not np.isfinite(week52_low)
+                        else min(week52_low, today_low)
+                    )
 
-        # ----------------------------------------------------
-        # DISTANCES
-        # ----------------------------------------------------
         from_52w_high = (
             (current_price / week52_high - 1.0) * 100.0
-            if np.isfinite(week52_high) and week52_high > 0
-            else np.nan
+            if np.isfinite(week52_high) and week52_high > 0 else np.nan
         )
-
         from_52w_low = (
             (current_price / week52_low - 1.0) * 100.0
-            if np.isfinite(week52_low) and week52_low > 0
-            else np.nan
+            if np.isfinite(week52_low) and week52_low > 0 else np.nan
         )
-
         from_21_ema = (
             (current_price / ema21 - 1.0) * 100.0
-            if np.isfinite(ema21) and ema21 > 0
-            else np.nan
+            if np.isfinite(ema21) and ema21 > 0 else np.nan
         )
 
-        # ----------------------------------------------------
-        # TREND
-        # ----------------------------------------------------
-        if (
-            current_price > ema21
-            and ema21 > ema50
-            and ema50 > ema200
-        ):
+        if current_price > ema21 and ema21 > ema50 and ema50 > ema200:
             trend = "Bullish"
-        elif (
-            current_price < ema21
-            and ema21 < ema50
-            and ema50 < ema200
-        ):
+        elif current_price < ema21 and ema21 < ema50 and ema50 < ema200:
             trend = "Bearish"
         else:
             trend = "Neutral"
@@ -555,7 +417,6 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
 
     except Exception as exc:
         return None, str(exc)
-
 
 def get_index_date(index_value):
     try:
@@ -590,6 +451,10 @@ def colour_trend(value):
             "font-weight: bold;"
         )
     return ""
+
+if refresh_clicked:
+    get_intraday.clear()
+    st.rerun()
 
 # ============================================================
 # LIVE SCAN / AUTO REFRESH
