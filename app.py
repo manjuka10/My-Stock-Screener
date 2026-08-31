@@ -35,9 +35,18 @@ IST = ZoneInfo("Asia/Kolkata")
 if "scan_started" not in st.session_state:
     st.session_state.scan_started = False
 
-scan_clicked = st.button("🔍 Scan Nifty 100", type="primary")
+scan_col1, scan_col2 = st.columns([1, 1])
+with scan_col1:
+    scan_clicked = st.button("🔍 Scan Nifty 100", type="primary")
+with scan_col2:
+    refresh_clicked = st.button("🔄 Refresh Live Data")
+
 if scan_clicked:
     st.session_state.scan_started = True
+
+if refresh_clicked:
+    get_intraday.clear()
+    st.rerun()
 
 # ============================================================
 # NIFTY 100 LIST
@@ -105,7 +114,7 @@ def get_daily(symbols):
         threads=True
     )
 
-@st.cache_data(ttl=45)
+@st.cache_data(ttl=20, show_spinner=False)
 def get_intraday(symbols):
     tickers = [s + ".NS" for s in symbols]
 
@@ -233,11 +242,18 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # weekends, so date validation is essential.
         # ----------------------------------------------------
         valid_today_intraday = False
+        today_intraday = pd.DataFrame()
+
         if not intraday.empty:
             intraday_dates = index_to_dates(intraday.index)
-            valid_today_intraday = bool(
-                (intraday_dates == today).any()
-            )
+            today_intraday = intraday.loc[
+                intraday_dates == today
+            ].copy()
+
+            if not today_intraday.empty and "Close" in today_intraday.columns:
+                valid_today_intraday = bool(
+                    today_intraday["Close"].dropna().shape[0] > 0
+                )
 
         live_session = (
             is_nse_session_now(now_ist)
@@ -268,9 +284,6 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # CURRENT PRICE
         # ----------------------------------------------------
         if live_session:
-            today_intraday = intraday.loc[
-                index_to_dates(intraday.index) == today
-            ].copy()
             prices = today_intraday["Close"].dropna()
 
             if not prices.empty:
@@ -318,8 +331,7 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # Same-date previous week, falling back to the previous
         # trading day on/before the target date.
         # ----------------------------------------------------
-        reference_date = today if live_session else historical.index[-1]
-        reference_date = get_index_date(reference_date)
+        reference_date = today if live_session else get_index_date(historical.index[-1])
 
         if reference_date is not None:
             week_target = (
@@ -447,10 +459,7 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         week52_high = historical_high
         week52_low = historical_low
 
-        if live_session and not intraday.empty:
-            today_intraday = intraday.loc[
-                index_to_dates(intraday.index) == today
-            ].copy()
+        if live_session and not today_intraday.empty:
 
             if "High" in today_intraday.columns:
                 highs = pd.to_numeric(
@@ -580,7 +589,7 @@ def colour_trend(value):
 # LIVE SCAN / AUTO REFRESH
 # ============================================================
 
-@st.fragment(run_every="60s")
+@st.fragment(run_every="30s")
 def live_scan():
     if not st.session_state.scan_started:
         return
