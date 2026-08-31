@@ -44,10 +44,6 @@ with scan_col2:
 if scan_clicked:
     st.session_state.scan_started = True
 
-if refresh_clicked:
-    get_intraday.clear()
-    st.rerun()
-
 # ============================================================
 # NIFTY 100 LIST
 # ============================================================
@@ -127,6 +123,11 @@ def get_intraday(symbols):
         group_by="ticker",
         threads=True
     )
+
+# The function must exist before its cache can be cleared.
+if refresh_clicked:
+    get_intraday.clear()
+    st.rerun()
 
 # ============================================================
 # EXTRACT ONE TICKER
