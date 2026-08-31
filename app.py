@@ -113,7 +113,6 @@ def get_daily(symbols):
 @st.cache_data(ttl=20, show_spinner=False)
 def get_intraday(symbols):
     tickers = [s + ".NS" for s in symbols]
-
     return yf.download(
         tickers=tickers,
         period="5d",
@@ -121,13 +120,11 @@ def get_intraday(symbols):
         auto_adjust=False,
         progress=False,
         group_by="ticker",
-        threads=True
+        threads=True,
+        prepost=False
     )
 
-if refresh_clicked:
-    get_intraday.clear()
-    st.rerun()
-
+# The function must exist before its cache can be cleared.
 # ============================================================
 # EXTRACT ONE TICKER
 # ============================================================
@@ -243,15 +240,26 @@ def calculate_stock_data(symbol, daily_all, intraday_all, now_ist):
         # ----------------------------------------------------
         valid_today_intraday = False
         today_intraday = pd.DataFrame()
+        latest_intraday = pd.DataFrame()
+        latest_intraday_date = None
+
         if not intraday.empty:
             intraday_dates = index_to_dates(intraday.index)
             today_intraday = intraday.loc[
                 intraday_dates == today
             ].copy()
+
             if not today_intraday.empty and "Close" in today_intraday.columns:
                 valid_today_intraday = bool(
                     today_intraday["Close"].dropna().shape[0] > 0
                 )
+
+            valid_dates = intraday_dates.dropna()
+            if not valid_dates.empty:
+                latest_intraday_date = valid_dates.max()
+                latest_intraday = intraday.loc[
+                    intraday_dates == latest_intraday_date
+                ].copy()
 
         live_session = (
             is_nse_session_now(now_ist)
@@ -709,19 +717,6 @@ def live_scan():
     st.success(
         f"🕐 Last updated: {updated_time}"
     )
-
-    if is_nse_session_now(now_ist):
-        live_count = int(df["Price"].notna().sum())
-        st.info(
-            f"🟢 Live-session mode: {live_count}/{len(symbols)} stocks have "
-            f"current-day intraday data. Price, returns, EMA and 52W values "
-            f"are recalculated from the latest valid intraday price."
-        )
-    else:
-        st.info(
-            "🔵 Market closed: showing the latest completed NSE trading-session "
-            "close. During market hours, current-day intraday prices are used."
-        )
 
     st.info(
         f"Nifty 100: {len(symbols)} stocks | "
