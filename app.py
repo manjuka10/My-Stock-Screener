@@ -5,7 +5,7 @@ import yfinance as yf
 import requests
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 st.set_page_config(
@@ -345,7 +345,7 @@ scan_clicked = st.button("🔍 Scan Nifty 100")
 if scan_clicked:
     st.session_state.scan_started = True
 
-@st.fragment(run_every='30s')
+@st.fragment(run_every='5m')
 def render_scan():
     if not st.session_state.scan_started:
         return
