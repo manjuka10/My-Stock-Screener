@@ -122,7 +122,8 @@ def get_intraday(symbols):
         progress=False,
         group_by="ticker",
         threads=True,
-        prepost=False
+        prepost=False,
+        ignore_tz=False
     )
 
 
@@ -136,21 +137,31 @@ def get_ticker_data(data, ticker):
 
     try:
         if isinstance(data.columns, pd.MultiIndex):
-            level0 = data.columns.get_level_values(0)
-            level1 = data.columns.get_level_values(1)
-
-            if ticker in level0:
+            # Handle both Yahoo layouts:
+            #   (Ticker, Field) and (Field, Ticker)
+            if ticker in data.columns.get_level_values(0):
                 result = data[ticker].copy()
-            elif ticker in level1:
-                result = data.xs(
-                    ticker,
-                    axis=1,
-                    level=1
-                ).copy()
+            elif ticker in data.columns.get_level_values(1):
+                result = data.xs(ticker, axis=1, level=1).copy()
             else:
-                return pd.DataFrame()
+                # Some Yahoo responses can normalize ticker labels.
+                short = ticker.replace(".NS", "")
+                if short in data.columns.get_level_values(0):
+                    result = data[short].copy()
+                elif short in data.columns.get_level_values(1):
+                    result = data.xs(short, axis=1, level=1).copy()
+                else:
+                    return pd.DataFrame()
         else:
             result = data.copy()
+
+        # If a one-ticker response still has a MultiIndex, flatten it.
+        if isinstance(result.columns, pd.MultiIndex):
+            result.columns = [
+                c[-1] if c[-1] in ("Open", "High", "Low", "Close")
+                else c[0]
+                for c in result.columns
+            ]
 
         wanted = ["Open", "High", "Low", "Close"]
         cols = [c for c in wanted if c in result.columns]
@@ -161,15 +172,13 @@ def get_ticker_data(data, ticker):
         result = result[cols].copy()
 
         for col in cols:
-            result[col] = pd.to_numeric(
-                result[col],
-                errors="coerce"
-            )
+            result[col] = pd.to_numeric(result[col], errors="coerce")
 
         return result.dropna(how="all")
 
     except Exception:
         return pd.DataFrame()
+
 
 # ============================================================
 # DATE / MARKET HELPERS
